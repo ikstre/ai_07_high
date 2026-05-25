@@ -105,6 +105,12 @@ DEFAULTS = {
     "deskmat_color": "#1f2937",
     "desk_color": "#d8b892",
     "mouse_color": "#f7f7f2",
+    "case_finish": "anodized",
+    "plate_material": "aluminum",
+    "pcb_color": "black",
+    "switch_stem": "red",
+    "show_internals": False,
+    "monitor_arm_style": "single",
     "desk_preset": "120 x 60 cm",
     "desk_width": 120.0,
     "desk_depth": 60.0,
@@ -120,6 +126,54 @@ DEFAULTS = {
     "ad_tone": "감성형",
     "image_ratio": "1:1",
     "extra_request": "깔끔하고 고급스러운 데스크셋업 광고 느낌",
+    "poster_template": "minimal_card",
+}
+
+CASE_FINISH_LABELS = {
+    "anodized": "아노다이징 알루미늄 (반광택)",
+    "matte": "무광 페인트",
+    "polycarbonate": "폴리카보네이트 (반투명톤)",
+    "wood": "원목 마감",
+}
+
+PLATE_MATERIAL_LABELS = {
+    "aluminum": "알루미늄 (단단·청량한 타건)",
+    "brass": "황동 (묵직·차분)",
+    "pom": "POM (탄성·부드러움)",
+    "fr4": "FR4 글래스 (밸런스)",
+    "carbon": "카본 (가벼움·드라이)",
+    "polycarbonate": "폴리카보네이트 (탄성·부드러움)",
+}
+
+PCB_COLOR_LABELS = {
+    "black": "블랙 PCB",
+    "red": "레드 PCB",
+    "blue": "블루 PCB",
+    "green": "그린 PCB",
+    "white": "화이트 PCB",
+}
+
+SWITCH_STEM_LABELS = {
+    "red": "Red (Linear, 가벼움)",
+    "yellow": "Yellow (Linear, 부드러움)",
+    "brown": "Brown (Tactile, 사무용)",
+    "blue": "Blue (Clicky, 또렷)",
+    "clear": "Clear (Heavy Tactile)",
+    "silent_red": "Silent Red (정음)",
+    "tactile_purple": "Holy Panda 계열 (Tactile)",
+    "linear_black": "Black (Linear, 무거움)",
+}
+
+MONITOR_ARM_LABELS = {
+    "single": "싱글 암 (직선)",
+    "double_joint": "더블 조인트 (꺾임)",
+}
+
+POSTER_TEMPLATE_LABELS = {
+    "minimal_card": "Minimal Card (제품 강조)",
+    "grid_three": "Grid 3컷 (라이프스타일)",
+    "feature_focus": "Feature Focus (스펙 강조)",
+    "promo_banner": "Promo Banner (할인/광고)",
 }
 
 MONITOR_SIZES = {
@@ -167,8 +221,9 @@ KEYBOARD_MODEL_DEFAULTS = {
 
 FALLBACK_ASSETS = [
     {"id": "mouse", "label": "무선 마우스", "category": "input"},
-    {"id": "monitor", "label": "27인치 모니터", "category": "display"},
+    {"id": "monitor", "label": "모니터", "category": "display"},
     {"id": "monitor_arm", "label": "VESA 모니터암", "category": "display"},
+    {"id": "monitor_light_bar", "label": "모니터 라이트 바", "category": "lighting"},
     {"id": "desk_lamp", "label": "데스크 조명", "category": "lighting"},
     {"id": "plant", "label": "미니 화분", "category": "decor"},
     {"id": "speakers", "label": "북쉘프 스피커", "category": "audio"},
@@ -178,6 +233,15 @@ FALLBACK_ASSETS = [
     {"id": "phone_stand", "label": "스마트폰 스탠드", "category": "accessory"},
     {"id": "keycap_tray", "label": "키캡 진열 트레이", "category": "keyboard"},
     {"id": "coffee_mug", "label": "머그컵", "category": "decor"},
+    {"id": "digital_clock", "label": "디지털 시계", "category": "decor"},
+    {"id": "aroma_diffuser", "label": "아로마 디퓨저", "category": "decor"},
+    {"id": "wireless_charger", "label": "무선 충전 패드", "category": "accessory"},
+    {"id": "pen_holder", "label": "펜 홀더", "category": "stationery"},
+    {"id": "book_stack", "label": "책 묶음", "category": "decor"},
+    {"id": "humidifier", "label": "가습기", "category": "decor"},
+    {"id": "photo_frame", "label": "사진 액자", "category": "decor"},
+    {"id": "usb_hub", "label": "USB 허브", "category": "accessory"},
+    {"id": "mouse_pad_round", "label": "라운드 마우스패드", "category": "input"},
 ]
 
 
@@ -254,10 +318,15 @@ def render_model_viewer(model_url: str, height: int = 720, camera: str | None = 
         <html>
           <head>
             <meta charset="utf-8" />
-            <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+            <script type="module" src="https://unpkg.com/@google/model-viewer@4.0.0/dist/model-viewer.min.js"></script>
             <style>
               html, body {{ margin: 0; width: 100%; height: 100%; background: #f4f1eb; }}
-              model-viewer {{ width: 100%; height: {height}px; background: linear-gradient(180deg, #f7f4ee 0%, #e9edf0 100%); border-radius: 8px; }}
+              model-viewer {{
+                width: 100%;
+                height: {height}px;
+                background: radial-gradient(ellipse at center top, #f9f6f0 0%, #e7ecf1 60%, #dfe4eb 100%);
+                border-radius: 8px;
+              }}
             </style>
           </head>
           <body>
@@ -265,11 +334,16 @@ def render_model_viewer(model_url: str, height: int = 720, camera: str | None = 
               src="{data_url}"
               camera-controls
               auto-rotate
-              shadow-intensity="0.8"
-              exposure="0.72"
+              auto-rotate-delay="6000"
+              environment-image="neutral"
+              tone-mapping="aces"
+              shadow-intensity="1.4"
+              shadow-softness="0.85"
+              exposure="1.05"
               camera-orbit="{camera_orbits.get(camera_param, camera_orbits['perspective'])}"
               min-camera-orbit="auto auto 70m"
-              max-camera-orbit="auto auto 260m">
+              max-camera-orbit="auto auto 260m"
+              interaction-prompt="none">
             </model-viewer>
           </body>
         </html>
@@ -292,6 +366,12 @@ def build_render_payload() -> dict:
         "desk_width": st.session_state.desk_width,
         "desk_depth": st.session_state.desk_depth,
         "monitor_size": st.session_state.monitor_size,
+        "case_finish": st.session_state.case_finish,
+        "plate_material": st.session_state.plate_material,
+        "pcb_color": st.session_state.pcb_color,
+        "switch_stem": st.session_state.switch_stem,
+        "show_internals": st.session_state.show_internals,
+        "monitor_arm_style": st.session_state.monitor_arm_style,
     }
 
 
@@ -308,6 +388,7 @@ def build_ad_payload() -> dict:
         "image_ratio": st.session_state.image_ratio,
         "extra_request": st.session_state.extra_request,
         "model_url": st.session_state.model_url,
+        "poster_template": st.session_state.poster_template,
     }
 
 
@@ -455,9 +536,48 @@ with left_col:
             model_info = KEYBOARD_MODEL_DEFAULTS[st.session_state.keyboard_model]
             st.info(f"기본값: {st.session_state.keyboard_model} / {model_info['layout']} 배열\n\n{model_info['description']}")
 
+            with st.expander("키보드 상세 커스텀 (케이스/보강판/PCB/스위치)", expanded=True):
+                custom_a, custom_b = st.columns(2)
+                with custom_a:
+                    st.session_state.case_finish = st.selectbox(
+                        "케이스 마감",
+                        list(CASE_FINISH_LABELS.keys()),
+                        index=list(CASE_FINISH_LABELS.keys()).index(st.session_state.case_finish),
+                        format_func=lambda k: CASE_FINISH_LABELS[k],
+                    )
+                    st.session_state.plate_material = st.selectbox(
+                        "보강판(plate) 재질",
+                        list(PLATE_MATERIAL_LABELS.keys()),
+                        index=list(PLATE_MATERIAL_LABELS.keys()).index(st.session_state.plate_material),
+                        format_func=lambda k: PLATE_MATERIAL_LABELS[k],
+                    )
+                with custom_b:
+                    st.session_state.pcb_color = st.selectbox(
+                        "PCB 색상",
+                        list(PCB_COLOR_LABELS.keys()),
+                        index=list(PCB_COLOR_LABELS.keys()).index(st.session_state.pcb_color),
+                        format_func=lambda k: PCB_COLOR_LABELS[k],
+                    )
+                    st.session_state.switch_stem = st.selectbox(
+                        "스위치 stem",
+                        list(SWITCH_STEM_LABELS.keys()),
+                        index=list(SWITCH_STEM_LABELS.keys()).index(st.session_state.switch_stem),
+                        format_func=lambda k: SWITCH_STEM_LABELS[k],
+                    )
+                st.session_state.show_internals = st.checkbox(
+                    "내부 구조(보강판/PCB/스위치) 렌더 노출",
+                    value=st.session_state.show_internals,
+                    help="체크하면 키보드 측면에서 내부 적층 구조가 보이도록 두께를 살짝 분리합니다. 포스터 컷에서 분해도처럼 보이게 할 때 유용합니다.",
+                )
+
             st.markdown("##### 데스크테리어 항목")
             assets = fetch_desk_assets()
             asset_labels = {asset["id"]: f"{asset['label']} · {asset.get('category', 'asset')}" for asset in assets}
+            categories: dict[str, list[str]] = {}
+            for asset in assets:
+                categories.setdefault(asset.get("category", "etc"), []).append(asset["id"])
+            asset_caption = " / ".join(f"{cat}({len(items)})" for cat, items in sorted(categories.items()))
+            st.caption(f"전체 {len(assets)}개 에셋 · {asset_caption}")
             st.session_state.asset_selection = st.multiselect(
                 "렌더링에 포함할 판매/연출 물품",
                 options=[asset["id"] for asset in assets],
@@ -503,10 +623,19 @@ with left_col:
                     index=list(MONITOR_SIZES.keys()).index(st.session_state.monitor_size),
                     format_func=lambda k: MONITOR_SIZES[k],
                 )
+                st.session_state.monitor_arm_style = st.selectbox(
+                    "모니터암 스타일",
+                    options=list(MONITOR_ARM_LABELS.keys()),
+                    index=list(MONITOR_ARM_LABELS.keys()).index(st.session_state.monitor_arm_style),
+                    format_func=lambda k: MONITOR_ARM_LABELS[k],
+                )
             with mon_b:
                 kb_layout = st.session_state.layout
                 st.caption(f"키보드: {KEYBOARD_SIZE_INFO.get(kb_layout, kb_layout + '% 배열')}")
                 st.caption("렌더 단위: 1 GLB unit = 1 cm  |  1u = 1.905 cm")
+                st.caption(f"케이스: {CASE_FINISH_LABELS[st.session_state.case_finish]}")
+                st.caption(f"보강판: {PLATE_MATERIAL_LABELS[st.session_state.plate_material]}")
+                st.caption(f"스위치: {SWITCH_STEM_LABELS[st.session_state.switch_stem]}")
             color_a, color_b = st.columns(2)
             with color_a:
                 st.session_state.case_color = st.color_picker("하우징", st.session_state.case_color)
@@ -526,8 +655,22 @@ with left_col:
 
         else:
             st.markdown("#### 광고 콘텐츠")
-            st.session_state.ad_tone = st.selectbox("광고 톤", ["프리미엄형", "감성형", "할인형", "기능강조형"])
-            st.session_state.image_ratio = st.selectbox("이미지 비율", ["1:1", "4:5", "16:9"])
+            ad_a, ad_b = st.columns(2)
+            with ad_a:
+                st.session_state.ad_tone = st.selectbox("광고 톤", ["프리미엄형", "감성형", "할인형", "기능강조형"])
+                st.session_state.image_ratio = st.selectbox("이미지 비율", ["1:1", "4:5", "16:9"])
+            with ad_b:
+                st.session_state.poster_template = st.selectbox(
+                    "포스터 템플릿",
+                    options=list(POSTER_TEMPLATE_LABELS.keys()),
+                    index=list(POSTER_TEMPLATE_LABELS.keys()).index(st.session_state.poster_template),
+                    format_func=lambda k: POSTER_TEMPLATE_LABELS[k],
+                )
+                config_now = fetch_security_config()
+                local_llm_status = "🟢" if config_now.get("local_llm_base_url") == "set" else "⚪"
+                openai_status = "🟢" if config_now.get("openai_api_key") == "set" else "⚪"
+                local_img_status = "🟢" if config_now.get("local_image_endpoint") == "set" else "⚪"
+                st.caption(f"AI: OpenAI {openai_status}  Local LLM {local_llm_status}  Local Image {local_img_status}")
             st.session_state.extra_request = st.text_area("추가 요청", st.session_state.extra_request, height=110)
 
             col_copy, col_poster = st.columns(2)
@@ -610,11 +753,22 @@ with result_col:
         with poster_tab:
             poster = st.session_state.poster_result
             if poster:
+                template_label = POSTER_TEMPLATE_LABELS.get(poster.get("poster_template", ""), poster.get("poster_template", ""))
+                badge = f"`{template_label}`"
+                if poster.get("image_embedded"):
+                    badge += "  ·  🖼️ 로컬 이미지 합성"
+                elif (poster.get("local_image_reference") or {}).get("error"):
+                    badge += "  ·  ⚠️ 로컬 이미지 endpoint 오류"
+                st.caption(badge)
                 components.html(fetch_text_asset(poster["poster_url"]), height=600, scrolling=True)
                 with st.expander("이미지 생성 프롬프트", expanded=False):
                     st.write(poster["image_prompt"])
+                if poster.get("local_image_reference"):
+                    with st.expander("로컬 이미지 모델 응답", expanded=False):
+                        st.json(poster["local_image_reference"])
             else:
                 st.write("광고 콘텐츠 단계에서 `포스터 생성`을 누르면 SVG 포스터와 생성 프롬프트가 표시됩니다.")
+                st.caption("로컬 이미지 모델 (LOCAL_IMAGE_ENDPOINT) 이 설정되어 있으면 생성된 이미지가 포스터에 직접 합성됩니다.")
 
         st.divider()
 

@@ -18,6 +18,11 @@ __pycache__/
 # Generated uploads/artifacts
 */static/uploads/
 */static/posters/
+deskad_keyboard_demo/static/models/desk_setup_*.glb
+deskad_keyboard_demo/static/models/keyboard_*.glb
+deskad_keyboard_demo/static/models/uploaded_*.glb
+deskad_keyboard_demo/training/output/
+deskad_keyboard_demo/training/datasets/
 
 # Large local model artifacts
 models/
