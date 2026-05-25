@@ -1,0 +1,28 @@
+
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Python/runtime noise
+__pycache__/
+*.py[cod]
+*.log
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+
+# Generated uploads/artifacts
+*/static/uploads/
+*/static/posters/
+
+# Large local model artifacts
+models/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.gguf

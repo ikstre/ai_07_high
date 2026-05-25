@@ -1,0 +1,220 @@
+[
+  {
+    "id": "mouse",
+    "label": "무선 마우스",
+    "category": "input",
+    "enabled_by_default": true,
+    "rendering": "procedural_glb",
+    "source": "built_in",
+    "license": "project_owned",
+    "notes": "조감도와 3/4 뷰에서 키보드 옆 기본 판매 소품으로 배치됩니다.",
+    "dimensions_cm": {
+      "width": 6.3,
+      "height": 3.6,
+      "depth": 11.8,
+      "basis": "typical wireless mouse footprint"
+    }
+  },
+  {
+    "id": "monitor",
+    "label": "27인치 모니터",
+    "category": "display",
+    "enabled_by_default": true,
+    "rendering": "procedural_glb",
+    "source": "VESA/display size references; procedural model",
+    "license": "project_owned",
+    "notes": "외형 치수만 참고한 자체 모델입니다. 실제 브랜드 로고를 포함하지 않습니다.",
+    "dimensions_cm": {
+      "width": 62.0,
+      "height": 36.0,
+      "depth": 2.6,
+      "basis": "27-inch 16:9 panel plus bezel"
+    }
+  },
+  {
+    "id": "monitor_arm",
+    "label": "VESA 모니터암",
+    "category": "display",
+    "enabled_by_default": true,
+    "rendering": "procedural_glb",
+    "source": "VESA 100x100 public standard; procedural model",
+    "license": "project_owned",
+    "notes": "100x100 마운트 플레이트를 단순 모델링했습니다.",
+    "dimensions_cm": {
+      "width": 10.0,
+      "height": 31.0,
+      "depth": 28.0,
+      "basis": "VESA MIS-D 100x100mm plate plus desk clamp"
+    }
+  },
+  {
+    "id": "desk_lamp",
+    "label": "데스크 조명",
+    "category": "lighting",
+    "enabled_by_default": true,
+    "rendering": "procedural_glb",
+    "source": "built_in procedural model; Pixabay/Poly Pizza candidates for future GLB replacement",
+    "license": "project_owned",
+    "external_candidates": [
+      "https://pixabay.com/3d-models/desk-light-desk-lamp-lamp-grey-1137/",
+      "https://poly.pizza/search/lamp"
+    ],
+    "notes": "RGB/프리미엄 테마에 따라 조명 색상이 바뀝니다.",
+    "dimensions_cm": {
+      "width": 34.0,
+      "height": 28.0,
+      "depth": 17.0,
+      "basis": "compact adjustable desk lamp"
+    }
+  },
+  {
+    "id": "plant",
+    "label": "미니 화분",
+    "category": "decor",
+    "enabled_by_default": true,
+    "rendering": "procedural_glb",
+    "source": "built_in",
+    "license": "project_owned",
+    "external_candidates": [
+      "https://poly.pizza/search/plant",
+      "https://poly.pizza/search/potted%20plant"
+    ],
+    "notes": "데스크테리어 감성 컷의 우측 후면 포인트 오브젝트입니다.",
+    "dimensions_cm": {
+      "width": 14.0,
+      "height": 21.0,
+      "depth": 12.0,
+      "basis": "small desk plant pot"
+    }
+  },
+  {
+    "id": "speakers",
+    "label": "북쉘프 스피커",
+    "category": "audio",
+    "enabled_by_default": false,
+    "rendering": "procedural_glb",
+    "source": "built_in",
+    "license": "project_owned",
+    "external_candidates": [
+      "https://poly.pizza/search/speaker",
+      "https://poly.pizza/search/speakers"
+    ],
+    "notes": "좌우 한 쌍으로 모니터 옆에 배치됩니다.",
+    "dimensions_cm": {
+      "width": 11.5,
+      "height": 18.0,
+      "depth": 10.0,
+      "basis": "compact desktop bookshelf speaker, each"
+    }
+  },
+  {
+    "id": "desk_shelf",
+    "label": "모니터 받침대",
+    "category": "furniture",
+    "enabled_by_default": false,
+    "rendering": "procedural_glb",
+    "source": "built_in",
+    "license": "project_owned",
+    "notes": "키보드 상단의 수납/레이어감을 보여주는 판매 소품입니다.",
+    "dimensions_cm": {
+      "width": 72.0,
+      "height": 9.2,
+      "depth": 22.0,
+      "basis": "monitor riser shelf"
+    }
+  },
+  {
+    "id": "notebook",
+    "label": "노트/플래너",
+    "category": "stationery",
+    "enabled_by_default": false,
+    "rendering": "procedural_glb",
+    "source": "built_in",
+    "license": "project_owned",
+    "notes": "상세페이지 감성 컷 보조 소품으로 사용합니다.",
+    "dimensions_cm": {
+      "width": 15.0,
+      "height": 1.0,
+      "depth": 21.0,
+      "basis": "A5 notebook footprint"
+    }
+  },
+  {
+    "id": "headphone_stand",
+    "label": "헤드폰 스탠드",
+    "category": "audio",
+    "enabled_by_default": false,
+    "rendering": "procedural_glb",
+    "source": "built_in",
+    "license": "project_owned",
+    "external_candidates": [
+      "https://www.thingiverse.com/tag:headphone_stand"
+    ],
+    "notes": "게이밍/RGB 셋업의 우측 전면 액세서리입니다.",
+    "dimensions_cm": {
+      "width": 14.0,
+      "height": 26.4,
+      "depth": 9.0,
+      "basis": "compact headphone stand"
+    }
+  },
+  {
+    "id": "phone_stand",
+    "label": "스마트폰 스탠드",
+    "category": "accessory",
+    "enabled_by_default": false,
+    "rendering": "procedural_glb",
+    "source": "built_in; based on compact phone stand dimensions",
+    "license": "project_owned",
+    "external_candidates": [
+      "https://poly.pizza/search/phone%20stand",
+      "https://sketchfab.com/tags/phone-stand"
+    ],
+    "notes": "스마트스토어/인스타 상세컷에서 데스크 소품으로 배치됩니다.",
+    "dimensions_cm": {
+      "width": 8.0,
+      "height": 12.0,
+      "depth": 9.0,
+      "basis": "compact desktop phone stand"
+    }
+  },
+  {
+    "id": "keycap_tray",
+    "label": "키캡 진열 트레이",
+    "category": "keyboard",
+    "enabled_by_default": false,
+    "rendering": "procedural_glb",
+    "source": "built_in; keyboard retail display tray",
+    "license": "project_owned",
+    "external_candidates": [
+      "https://www.thingiverse.com/search?q=keycap+tray&type=things"
+    ],
+    "notes": "키보드 샵의 키캡 번들/포인트 키 홍보용 소품입니다.",
+    "dimensions_cm": {
+      "width": 20.0,
+      "height": 3.0,
+      "depth": 12.0,
+      "basis": "small keycap display tray"
+    }
+  },
+  {
+    "id": "coffee_mug",
+    "label": "머그컵",
+    "category": "decor",
+    "enabled_by_default": false,
+    "rendering": "procedural_glb",
+    "source": "built_in; common desk mug proportions",
+    "license": "project_owned",
+    "external_candidates": [
+      "https://poly.pizza/search/mug",
+      "https://sketchfab.com/tags/mug?features=downloadable"
+    ],
+    "notes": "생활감 있는 홈오피스 광고컷 보조 소품입니다.",
+    "dimensions_cm": {
+      "width": 9.5,
+      "height": 8.2,
+      "depth": 8.5,
+      "basis": "standard coffee mug footprint"
+    }
+  }
+]
