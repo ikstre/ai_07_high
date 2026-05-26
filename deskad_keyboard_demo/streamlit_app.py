@@ -23,16 +23,6 @@ def load_env_file(path: Path) -> None:
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
-def load_env_file(path: Path) -> None:
-    if not path.exists():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
 
 load_env_file(APP_DIR / ".env")
 API_BASE = os.getenv("DESKAD_API_BASE", "http://127.0.0.1:8000").rstrip("/")
@@ -234,8 +224,6 @@ FALLBACK_ASSETS = [
     {"id": "monitor", "label": "모니터", "category": "display"},
     {"id": "monitor_arm", "label": "VESA 모니터암", "category": "display"},
     {"id": "monitor_light_bar", "label": "모니터 라이트 바", "category": "lighting"},
-    {"id": "monitor", "label": "27인치 모니터", "category": "display"},
-    {"id": "monitor_arm", "label": "VESA 모니터암", "category": "display"},
     {"id": "desk_lamp", "label": "데스크 조명", "category": "lighting"},
     {"id": "plant", "label": "미니 화분", "category": "decor"},
     {"id": "speakers", "label": "북쉘프 스피커", "category": "audio"},
@@ -339,10 +327,6 @@ def render_model_viewer(model_url: str, height: int = 720, camera: str | None = 
                 background: radial-gradient(ellipse at center top, #f9f6f0 0%, #e7ecf1 60%, #dfe4eb 100%);
                 border-radius: 8px;
               }}
-            <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
-            <style>
-              html, body {{ margin: 0; width: 100%; height: 100%; background: #f4f1eb; }}
-              model-viewer {{ width: 100%; height: {height}px; background: linear-gradient(180deg, #f7f4ee 0%, #e9edf0 100%); border-radius: 8px; }}
             </style>
           </head>
           <body>
@@ -360,11 +344,6 @@ def render_model_viewer(model_url: str, height: int = 720, camera: str | None = 
               min-camera-orbit="auto auto 70m"
               max-camera-orbit="auto auto 260m"
               interaction-prompt="none">
-              shadow-intensity="0.8"
-              exposure="0.72"
-              camera-orbit="{camera_orbits.get(camera_param, camera_orbits['perspective'])}"
-              min-camera-orbit="auto auto 70m"
-              max-camera-orbit="auto auto 260m">
             </model-viewer>
           </body>
         </html>
@@ -599,9 +578,6 @@ with left_col:
                 categories.setdefault(asset.get("category", "etc"), []).append(asset["id"])
             asset_caption = " / ".join(f"{cat}({len(items)})" for cat, items in sorted(categories.items()))
             st.caption(f"전체 {len(assets)}개 에셋 · {asset_caption}")
-            st.markdown("##### 데스크테리어 항목")
-            assets = fetch_desk_assets()
-            asset_labels = {asset["id"]: f"{asset['label']} · {asset.get('category', 'asset')}" for asset in assets}
             st.session_state.asset_selection = st.multiselect(
                 "렌더링에 포함할 판매/연출 물품",
                 options=[asset["id"] for asset in assets],
@@ -695,8 +671,6 @@ with left_col:
                 openai_status = "🟢" if config_now.get("openai_api_key") == "set" else "⚪"
                 local_img_status = "🟢" if config_now.get("local_image_endpoint") == "set" else "⚪"
                 st.caption(f"AI: OpenAI {openai_status}  Local LLM {local_llm_status}  Local Image {local_img_status}")
-            st.session_state.ad_tone = st.selectbox("광고 톤", ["프리미엄형", "감성형", "할인형", "기능강조형"])
-            st.session_state.image_ratio = st.selectbox("이미지 비율", ["1:1", "4:5", "16:9"])
             st.session_state.extra_request = st.text_area("추가 요청", st.session_state.extra_request, height=110)
 
             col_copy, col_poster = st.columns(2)
@@ -795,11 +769,6 @@ with result_col:
             else:
                 st.write("광고 콘텐츠 단계에서 `포스터 생성`을 누르면 SVG 포스터와 생성 프롬프트가 표시됩니다.")
                 st.caption("로컬 이미지 모델 (LOCAL_IMAGE_ENDPOINT) 이 설정되어 있으면 생성된 이미지가 포스터에 직접 합성됩니다.")
-                components.html(fetch_text_asset(poster["poster_url"]), height=600, scrolling=True)
-                with st.expander("이미지 생성 프롬프트", expanded=False):
-                    st.write(poster["image_prompt"])
-            else:
-                st.write("광고 콘텐츠 단계에서 `포스터 생성`을 누르면 SVG 포스터와 생성 프롬프트가 표시됩니다.")
 
         st.divider()
 

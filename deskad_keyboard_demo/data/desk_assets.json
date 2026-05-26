@@ -22,15 +22,6 @@
   {
     "id": "monitor",
     "label": "모니터 (24/27/32인치)",
-      "width": 6.3,
-      "height": 3.6,
-      "depth": 11.8,
-      "basis": "typical wireless mouse footprint"
-    }
-  },
-  {
-    "id": "monitor",
-    "label": "27인치 모니터",
     "category": "display",
     "enabled_by_default": true,
     "rendering": "procedural_glb",
@@ -47,13 +38,6 @@
       "https://poly.pizza/search/monitor",
       "https://sketchfab.com/tags/monitor?features=downloadable"
     ]
-    "notes": "외형 치수만 참고한 자체 모델입니다. 실제 브랜드 로고를 포함하지 않습니다.",
-    "dimensions_cm": {
-      "width": 62.0,
-      "height": 36.0,
-      "depth": 2.6,
-      "basis": "27-inch 16:9 panel plus bezel"
-    }
   },
   {
     "id": "monitor_arm",
@@ -64,7 +48,6 @@
     "source": "VESA 100x100 public standard; procedural model",
     "license": "project_owned",
     "notes": "100x100 마운트 플레이트를 단순 모델링했습니다. single/double_joint 스타일 지원.",
-    "notes": "100x100 마운트 플레이트를 단순 모델링했습니다.",
     "dimensions_cm": {
       "width": 10.0,
       "height": 31.0,
@@ -95,7 +78,6 @@
       "https://poly.pizza/search/monitor%20light",
       "https://sketchfab.com/tags/screenbar"
     ]
-    }
   },
   {
     "id": "desk_lamp",
@@ -109,7 +91,6 @@
       "https://pixabay.com/3d-models/desk-light-desk-lamp-lamp-grey-1137/",
       "https://poly.pizza/search/lamp",
       "https://sketchfab.com/tags/desk-lamp?features=downloadable"
-      "https://poly.pizza/search/lamp"
     ],
     "notes": "RGB/프리미엄 테마에 따라 조명 색상이 바뀝니다.",
     "dimensions_cm": {
@@ -122,7 +103,6 @@
   {
     "id": "plant",
     "label": "미니 화분 / 다육식물",
-    "label": "미니 화분",
     "category": "decor",
     "enabled_by_default": true,
     "rendering": "procedural_glb",
@@ -132,7 +112,6 @@
       "https://poly.pizza/search/plant",
       "https://poly.pizza/search/potted%20plant",
       "https://sketchfab.com/tags/houseplant?features=downloadable"
-      "https://poly.pizza/search/potted%20plant"
     ],
     "notes": "데스크테리어 감성 컷의 우측 후면 포인트 오브젝트입니다.",
     "dimensions_cm": {
@@ -140,9 +119,6 @@
       "height": 22.0,
       "depth": 14.0,
       "basis": "small desk plant in ceramic pot"
-      "height": 21.0,
-      "depth": 12.0,
-      "basis": "small desk plant pot"
     }
   },
   {
@@ -163,20 +139,12 @@
       "width": 12.0,
       "height": 18.0,
       "depth": 11.0,
-      "https://poly.pizza/search/speakers"
-    ],
-    "notes": "좌우 한 쌍으로 모니터 옆에 배치됩니다.",
-    "dimensions_cm": {
-      "width": 11.5,
-      "height": 18.0,
-      "depth": 10.0,
       "basis": "compact desktop bookshelf speaker, each"
     }
   },
   {
     "id": "desk_shelf",
     "label": "모니터 받침대 / 모니터 라이저",
-    "label": "모니터 받침대",
     "category": "furniture",
     "enabled_by_default": false,
     "rendering": "procedural_glb",
@@ -187,7 +155,6 @@
       "https://sketchfab.com/tags/monitor-riser"
     ],
     "notes": "키보드 상단의 수납/레이어감을 보여주는 판매 소품입니다. 책상 폭에 따라 자동 리사이즈됩니다.",
-    "notes": "키보드 상단의 수납/레이어감을 보여주는 판매 소품입니다.",
     "dimensions_cm": {
       "width": 72.0,
       "height": 9.2,
@@ -198,7 +165,6 @@
   {
     "id": "notebook",
     "label": "노트 / 플래너",
-    "label": "노트/플래너",
     "category": "stationery",
     "enabled_by_default": false,
     "rendering": "procedural_glb",
@@ -212,10 +178,6 @@
     "dimensions_cm": {
       "width": 15.0,
       "height": 1.2,
-    "notes": "상세페이지 감성 컷 보조 소품으로 사용합니다.",
-    "dimensions_cm": {
-      "width": 15.0,
-      "height": 1.0,
       "depth": 21.0,
       "basis": "A5 notebook footprint"
     }
@@ -239,14 +201,6 @@
       "height": 28.0,
       "depth": 9.0,
       "basis": "compact headphone stand with hanging headphones"
-      "https://www.thingiverse.com/tag:headphone_stand"
-    ],
-    "notes": "게이밍/RGB 셋업의 우측 전면 액세서리입니다.",
-    "dimensions_cm": {
-      "width": 14.0,
-      "height": 26.4,
-      "depth": 9.0,
-      "basis": "compact headphone stand"
     }
   },
   {
@@ -265,8 +219,6 @@
     "dimensions_cm": {
       "width": 8.5,
       "height": 13.0,
-      "width": 8.0,
-      "height": 12.0,
       "depth": 9.0,
       "basis": "compact desktop phone stand"
     }
@@ -488,10 +440,6 @@
       "height": 0.4,
       "depth": 22.0,
       "basis": "round 22cm gaming mouse pad"
-      "width": 9.5,
-      "height": 8.2,
-      "depth": 8.5,
-      "basis": "standard coffee mug footprint"
     }
   }
 ]

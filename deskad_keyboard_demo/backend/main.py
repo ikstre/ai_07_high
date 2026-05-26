@@ -98,42 +98,6 @@ def _layout_path(layout: str) -> Path:
     return path
 
 
-class DeskSetupRenderRequest(KeyboardRenderRequest):
-    assets: list[str] = Field(default_factory=enabled_asset_ids)
-    desk_width: float = Field(default=120.0, ge=100.0, le=200.0)
-    desk_depth: float = Field(default=60.0, ge=50.0, le=90.0)
-    monitor_size: str = Field(default="27", pattern=r"^(24|27|32)$")
-
-
-class AdContentRequest(DeskSetupRenderRequest):
-    product_name: str = Field(default="크림 베이지 65% 커스텀 키보드")
-    product_type: str = Field(default="커스텀 키보드")
-    price: str = Field(default="189,000원")
-    target_channel: str = Field(default="인스타그램")
-    target_customer: str = Field(default="깔끔한 데스크 셋업을 원하는 직장인")
-    selling_point: str = Field(default="조용한 타건감, 크림 톤 키캡, 작은 책상에도 잘 맞는 65% 배열")
-    ad_tone: str = Field(default="감성형")
-    image_ratio: str = Field(default="1:1")
-    extra_request: str = Field(default="깔끔하고 고급스러운 데스크셋업 광고 느낌")
-    model_url: str | None = Field(default=None)
-
-
-class UploadedModelRequest(BaseModel):
-    filename: str
-    content_base64: str
-
-
-def _settings_base_url() -> str:
-    return get_settings().public_api_base_url.rstrip("/")
-
-
-def _layout_path(layout: str) -> Path:
-    path = DATA_DIR / "layouts" / f"layout_{layout}.json"
-    if not path.exists():
-        return DATA_DIR / "layouts" / "layout_65.json"
-    return path
-
-
 @app.get("/health")
 def health():
     return {"status": "ok", "config": redacted_settings()}
@@ -201,11 +165,6 @@ def model_viewer(model_url: str, camera: str = "perspective"):
           min-camera-orbit="auto auto 70m"
           max-camera-orbit="auto auto 260m"
           interaction-prompt="none">
-          shadow-intensity="0.8"
-          exposure="0.72"
-          camera-orbit="{orbit}"
-          min-camera-orbit="auto auto 70m"
-          max-camera-orbit="auto auto 260m">
         </model-viewer>
       </body>
     </html>
@@ -317,8 +276,6 @@ def generate_poster(request: AdContentRequest):
     safe_reference = None
     if isinstance(image_reference, dict):
         safe_reference = {k: v for k, v in image_reference.items() if k != "image_b64"}
-    poster_meta = save_poster_svg(payload=payload, copy_result=copy_result, poster_dir=POSTER_DIR)
-    image_reference = generate_local_image_reference(payload, image_prompt)
 
     return {
         "copy": copy_result,
@@ -328,5 +285,4 @@ def generate_poster(request: AdContentRequest):
         "poster_template": payload.get("poster_template", "minimal_card"),
         "local_image_reference": safe_reference,
         "image_embedded": bool(image_b64),
-        "local_image_reference": image_reference,
     }
