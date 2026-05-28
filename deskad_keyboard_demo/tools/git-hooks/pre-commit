@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Block commits that contain secret-shaped strings or non-placeholder values
+# in env files. Install with:
+#   ln -sf ../../deskad_keyboard_demo/tools/git-hooks/pre-commit .git/hooks/pre-commit
+# or from the repo root:
+#   ln -sf ../../deskad_keyboard_demo/tools/git-hooks/pre-commit ../.git/hooks/pre-commit
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SCAN="$REPO_ROOT/deskad_keyboard_demo/tools/scan_secrets.py"
+
+if [[ ! -f "$SCAN" ]]; then
+  echo "[pre-commit] scan_secrets.py not found, skipping." >&2
+  exit 0
+fi
+
+# Prefer the project's conda env if present; otherwise fall back to system python3.
+if command -v conda >/dev/null 2>&1 && conda env list 2>/dev/null | grep -q "^sprint_high "; then
+  PY=(conda run -n sprint_high --no-capture-output python)
+else
+  PY=(python3)
+fi
+
+if ! "${PY[@]}" "$SCAN"; then
+  echo
+  echo "[pre-commit] secret scan blocked the commit." >&2
+  echo "  - inspect the lines listed above"
+  echo "  - if it is a real secret, rotate it before committing"
+  echo "  - if it is a false positive, update tools/scan_secrets.py skip rules"
+  exit 1
+fi

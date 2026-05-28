@@ -1,7 +1,0 @@
-INFO:     127.0.0.1:55803 - "POST /render/keyboard-preview HTTP/1.1" 200 OK
-INFO:     127.0.0.1:58409 - "GET /viewer?model_url=http%3A%2F%2F127.0.0.1%3A8000%2Fstatic%2Fmodels%2Fkeyboard_65_a289d862.glb HTTP/1.1" 200 OK
-INFO:     127.0.0.1:58409 - "GET /static/models/keyboard_65_a289d862.glb HTTP/1.1" 200 OK
-INFO:     127.0.0.1:58412 - "POST /render/keyboard-preview HTTP/1.1" 200 OK
-INFO:     127.0.0.1:61520 - "POST /render/keyboard-preview HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62944 - "GET /viewer?model_url=http%3A%2F%2F127.0.0.1%3A8000%2Fstatic%2Fmodels%2Fkeyboard_65_2c5b7fa4.glb HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62944 - "GET /static/models/keyboard_65_2c5b7fa4.glb HTTP/1.1" 200 OK

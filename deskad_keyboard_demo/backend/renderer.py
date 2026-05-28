@@ -550,6 +550,128 @@ CASE_FINISH_PRESETS = {
     "wood": (0.7, 0.0),
 }
 
+KEYCAP_PROFILE_PRESETS = {
+    "cherry": {"height": 0.85, "gap": 0.18, "top_inset": 0.16, "top_taper": 0.26, "row_angles": {1: -2, 2: 1, 3: 4, 4: 7}},
+    "oem": {"height": 1.00, "gap": 0.18, "top_inset": 0.18, "top_taper": 0.30, "row_angles": {1: -4, 2: 0, 3: 5, 4: 9}},
+    "xda": {"height": 0.72, "gap": 0.16, "top_inset": 0.10, "top_taper": 0.20, "row_angles": {1: 0, 2: 0, 3: 0, 4: 0}},
+    "sa": {"height": 1.22, "gap": 0.20, "top_inset": 0.24, "top_taper": 0.36, "row_angles": {1: -7, 2: -2, 3: 6, 4: 12}},
+    "mda": {"height": 0.95, "gap": 0.17, "top_inset": 0.15, "top_taper": 0.28, "row_angles": {1: -3, 2: 0, 3: 3, 4: 6}},
+}
+
+SWITCH_FAMILY_PRESETS = {
+    "mx": {"housing": "#26282d", "top": "#3a3c42", "detail": "#5a616b", "housing_w": 1.40, "housing_d": 1.40, "stem": (0.65, 0.42, 0.65)},
+    "box": {"housing": "#f0f2f4", "top": "#d9dee4", "detail": "#7b8794", "housing_w": 1.48, "housing_d": 1.48, "stem": (0.58, 0.42, 0.58)},
+    "holy_panda": {"housing": "#f2e5c7", "top": "#e7d6aa", "detail": "#a46bb8", "housing_w": 1.42, "housing_d": 1.42, "stem": (0.68, 0.44, 0.68), "stem_color": "#7a4dc0"},
+    "topre": {"housing": "#2d3138", "top": "#4b5059", "detail": "#d8dce2", "housing_w": 1.46, "housing_d": 1.46, "stem": (0.72, 0.34, 0.72), "stem_color": "#e8e9eb"},
+}
+
+
+def _profile_row_angle(profile: dict, row: int) -> float:
+    return math.radians(profile.get("row_angles", {}).get(row, 0))
+
+
+def _mix_hex_color(value: str, target: str, amount: float) -> str:
+    def parse(color: str) -> tuple[int, int, int]:
+        color = color.strip().lstrip("#")[:6]
+        if len(color) != 6:
+            color = "cccccc"
+        return int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
+
+    amount = max(0.0, min(1.0, amount))
+    sr, sg, sb = parse(value)
+    tr, tg, tb = parse(target)
+    return f"#{round(sr + (tr - sr) * amount):02x}{round(sg + (tg - sg) * amount):02x}{round(sb + (tb - sb) * amount):02x}"
+
+
+def _add_contact_shadow(
+    builder: GlbBuilder,
+    *,
+    name: str,
+    center: tuple[float, float],
+    size: tuple[float, float],
+    material: int,
+    y: float = SURFACE_Y + 0.045,
+) -> None:
+    x, z = center
+    builder.add_box(name, (x, y, z), (size[0], 0.035, size[1]), material, taper=0.9)
+
+
+def _add_desk_surface_details(
+    builder: GlbBuilder,
+    *,
+    desk_width: float,
+    desk_depth: float,
+    grain_mat: int,
+    edge_mat: int,
+    grommet_mat: int,
+) -> None:
+    front_z = desk_depth / 2
+    back_z = -desk_depth / 2
+    for index, fraction in enumerate((0.13, 0.25, 0.39, 0.55, 0.71, 0.86)):
+        z = back_z + desk_depth * fraction
+        builder.add_box(
+            f"subtle wood grain line {index + 1}",
+            (0, SURFACE_Y + 0.045, z),
+            (desk_width - 8.0, 0.025, 0.07),
+            grain_mat,
+            taper=0.02,
+        )
+    for index, x in enumerate((-desk_width * 0.28, -desk_width * 0.08, desk_width * 0.16, desk_width * 0.34)):
+        builder.add_box(
+            f"short wood pore {index + 1}",
+            (x, SURFACE_Y + 0.05, back_z + 12.0 + index * 7.0),
+            (18.0 + index * 3.0, 0.025, 0.06),
+            grain_mat,
+            taper=0.02,
+        )
+    for index, (x, z) in enumerate(
+        (
+            (-desk_width / 2 + 9.0, back_z + 8.0),
+            (desk_width / 2 - 9.0, back_z + 8.0),
+            (-desk_width / 2 + 9.0, front_z - 8.0),
+            (desk_width / 2 - 9.0, front_z - 8.0),
+        )
+    ):
+        builder.add_box(
+            f"desk square leg {index + 1}",
+            (x, -TABLE_TOP_THICKNESS_CM - 10.0, z),
+            (4.0, 20.0, 4.0),
+            edge_mat,
+            taper=0.15,
+        )
+    builder.add_cylinder_y(
+        "desk cable grommet",
+        (desk_width / 2 - 17.0, SURFACE_Y + 0.08, back_z + 11.0),
+        3.4,
+        0.14,
+        grommet_mat,
+        radius_z=3.4,
+        segments=32,
+    )
+
+
+def _add_deskmat_details(
+    builder: GlbBuilder,
+    *,
+    center_z: float,
+    width: float,
+    depth: float,
+    stitch_mat: int,
+) -> None:
+    y = SURFACE_Y + 0.42
+    builder.add_box("deskmat stitched front edge", (0, y, center_z + depth / 2 - 0.55), (width - 1.8, 0.05, 0.18), stitch_mat, taper=0.05)
+    builder.add_box("deskmat stitched back edge", (0, y, center_z - depth / 2 + 0.55), (width - 1.8, 0.05, 0.18), stitch_mat, taper=0.05)
+    builder.add_box("deskmat stitched left edge", (-width / 2 + 0.55, y, center_z), (0.18, 0.05, depth - 1.8), stitch_mat, taper=0.05)
+    builder.add_box("deskmat stitched right edge", (width / 2 - 0.55, y, center_z), (0.18, 0.05, depth - 1.8), stitch_mat, taper=0.05)
+    for index, offset in enumerate((-0.28, -0.12, 0.08, 0.24)):
+        builder.add_box(
+            f"deskmat weave thread {index + 1}",
+            (0, y + 0.012, center_z + depth * offset),
+            (width - 8.0, 0.025, 0.045),
+            stitch_mat,
+            taper=0.02,
+        )
+
 
 def _add_keyboard_detailed(
     builder: GlbBuilder,
@@ -563,6 +685,9 @@ def _add_keyboard_detailed(
     plate_material: str = "aluminum",
     pcb_color: str = "black",
     switch_stem: str = "red",
+    switch_family: str = "mx",
+    keycap_profile: str = "cherry",
+    mount_type: str = "top_mount",
     show_internals: bool = True,
     accent_keys: set[int] | None = None,
 ) -> dict:
@@ -577,9 +702,13 @@ def _add_keyboard_detailed(
     case_bottom_h = 1.1
     plate_h = 0.20
     pcb_h = 0.16
-    switch_housing_h = 1.20
-    key_height_cm = 0.85
-    key_gap_cm = 0.18
+    profile = KEYCAP_PROFILE_PRESETS.get(keycap_profile, KEYCAP_PROFILE_PRESETS["cherry"])
+    switch_family_params = SWITCH_FAMILY_PRESETS.get(switch_family, SWITCH_FAMILY_PRESETS["mx"])
+    switch_housing_h = 1.12 if switch_family == "topre" else 1.20
+    key_height_cm = float(profile["height"])
+    key_gap_cm = float(profile["gap"])
+    key_top_inset_cm = float(profile["top_inset"])
+    key_top_taper = float(profile["top_taper"])
     center_x, center_z = center
 
     case_finish_params = CASE_FINISH_PRESETS.get(case_finish, CASE_FINISH_PRESETS["anodized"])
@@ -604,14 +733,35 @@ def _add_keyboard_detailed(
     pcb_mat = builder.add_material(f"pcb {pcb_color}", pcb_color_hex, roughness=pcb_rough, metallic=pcb_metal)
     pcb_trace_mat = builder.add_material("pcb traces", "#d4af37", roughness=0.45, metallic=0.55)
 
-    switch_housing_mat = builder.add_material("switch housing", "#26282d", roughness=0.55, metallic=0.0)
-    switch_top_mat = builder.add_material("switch top housing", "#3a3c42", roughness=0.55, metallic=0.0)
-    stem_color = SWITCH_STEM_COLORS.get(switch_stem, SWITCH_STEM_COLORS["red"])
-    stem_mat = builder.add_material(f"switch stem {switch_stem}", stem_color, roughness=0.55, metallic=0.0)
+    switch_housing_mat = builder.add_material(
+        f"{switch_family} switch housing",
+        switch_family_params["housing"],
+        roughness=0.55,
+        metallic=0.0,
+    )
+    switch_top_mat = builder.add_material(
+        f"{switch_family} switch top housing",
+        switch_family_params["top"],
+        roughness=0.55,
+        metallic=0.0,
+    )
+    stem_color = switch_family_params.get("stem_color") or SWITCH_STEM_COLORS.get(switch_stem, SWITCH_STEM_COLORS["red"])
+    stem_mat = builder.add_material(f"{switch_family} switch stem {switch_stem}", stem_color, roughness=0.55, metallic=0.0)
+    switch_detail_mat = builder.add_material(f"{switch_family} switch detail", switch_family_params["detail"], roughness=0.58, metallic=0.04)
 
     keycap_mat = builder.add_material("keycaps", keycap_color, roughness=0.72, metallic=0.0)
     accent_mat = builder.add_material("accent keycaps", accent_color, roughness=0.68, metallic=0.0)
+    keycap_side_mat = builder.add_material("keycap side shade", _mix_hex_color(keycap_color, "#111827", 0.10), roughness=0.78, metallic=0.0)
+    accent_side_mat = builder.add_material("accent keycap side shade", _mix_hex_color(accent_color, "#111827", 0.10), roughness=0.74, metallic=0.0)
+    keycap_top_highlight_mat = builder.add_material("keycap satin highlight", _mix_hex_color(keycap_color, "#ffffff", 0.12), roughness=0.82, metallic=0.0)
+    accent_top_highlight_mat = builder.add_material("accent keycap satin highlight", _mix_hex_color(accent_color, "#ffffff", 0.10), roughness=0.78, metallic=0.0)
     legend_mat = builder.add_material("keycap legends", "#1b1d22", roughness=0.8, metallic=0.0)
+    case_edge_mat = builder.add_material("case bevel shadow", _mix_hex_color(case_color, "#111827", 0.18), roughness=min(0.9, case_finish_params[0] + 0.08), metallic=case_finish_params[1] * 0.55)
+    case_highlight_mat = builder.add_material("case soft edge highlight", _mix_hex_color(case_color, "#ffffff", 0.10), roughness=case_finish_params[0], metallic=case_finish_params[1])
+    plate_cutout_mat = builder.add_material("plate cutout shadow", "#111318", roughness=0.75, metallic=0.0)
+    screw_mat = builder.add_material("case screw recess", "#20242b", roughness=0.55, metallic=0.2)
+    mount_mat = builder.add_material("keyboard mount cue", "#d9e3ea", roughness=0.74, metallic=0.0, alpha=0.72, alpha_mode="BLEND")
+    mount_dark_mat = builder.add_material("keyboard mount shadow", "#1f232a", roughness=0.68, metallic=0.0)
 
     case_y_center = SURFACE_Y + case_outer_h / 2
     builder.add_box(
@@ -635,6 +785,91 @@ def _add_keyboard_detailed(
         case_inner_mat,
         taper=0.04,
     )
+    builder.add_box("case front chamfer highlight", (center_x, SURFACE_Y + case_outer_h + 0.03, center_z + case_outer_d / 2 - 0.55), (case_outer_w - 1.2, 0.08, 0.25), case_highlight_mat, taper=0.05)
+    builder.add_box("case rear bevel shadow", (center_x, SURFACE_Y + case_outer_h + 0.02, center_z - case_outer_d / 2 + 0.55), (case_outer_w - 1.2, 0.08, 0.25), case_edge_mat, taper=0.05)
+    builder.add_box("case left side seam", (center_x - case_outer_w / 2 + 0.42, SURFACE_Y + case_bottom_h + 0.20, center_z), (0.16, 0.18, case_outer_d - 1.0), case_edge_mat, taper=0.03)
+    builder.add_box("case right side seam", (center_x + case_outer_w / 2 - 0.42, SURFACE_Y + case_bottom_h + 0.20, center_z), (0.16, 0.18, case_outer_d - 1.0), case_edge_mat, taper=0.03)
+    builder.add_box("usb c rear cutout", (center_x, SURFACE_Y + case_bottom_h + 0.45, center_z - case_outer_d / 2 - 0.02), (2.8, 0.50, 0.16), case_inner_mat, taper=0.08)
+    for screw_index, (dx, dz) in enumerate(
+        (
+            (-case_outer_w / 2 + 2.4, -case_outer_d / 2 + 1.8),
+            (case_outer_w / 2 - 2.4, -case_outer_d / 2 + 1.8),
+            (-case_outer_w / 2 + 2.4, case_outer_d / 2 - 1.8),
+            (case_outer_w / 2 - 2.4, case_outer_d / 2 - 1.8),
+        )
+    ):
+        builder.add_cylinder_y(
+            f"case screw recess {screw_index + 1}",
+            (center_x + dx, SURFACE_Y + case_outer_h + 0.055, center_z + dz),
+            0.35,
+            0.05,
+            screw_mat,
+            radius_z=0.35,
+            segments=18,
+        )
+    if case_finish == "wood":
+        for grain_index, dz in enumerate((-case_outer_d * 0.22, 0.0, case_outer_d * 0.23)):
+            builder.add_box(
+                f"keyboard case wood grain {grain_index + 1}",
+                (center_x, SURFACE_Y + case_outer_h + 0.07, center_z + dz),
+                (case_outer_w - 3.0, 0.025, 0.06),
+                case_edge_mat,
+                taper=0.02,
+            )
+
+    if mount_type == "gasket_mount":
+        for side_index, dz in enumerate((-board_depth_cm / 2 - 0.38, board_depth_cm / 2 + 0.38)):
+            builder.add_box(
+                f"gasket isolation strip {side_index + 1}",
+                (center_x, SURFACE_Y + case_outer_h + 0.10, center_z + dz),
+                (board_width_cm + 0.8, 0.12, 0.20),
+                mount_mat,
+                taper=0.04,
+            )
+        for side_index, dx in enumerate((-board_width_cm / 2 - 0.38, board_width_cm / 2 + 0.38)):
+            builder.add_box(
+                f"gasket side strip {side_index + 1}",
+                (center_x + dx, SURFACE_Y + case_outer_h + 0.10, center_z),
+                (0.20, 0.12, board_depth_cm + 0.8),
+                mount_mat,
+                taper=0.04,
+            )
+    elif mount_type == "tray_mount":
+        for standoff_index, (dx, dz) in enumerate(((-board_width_cm / 3, -board_depth_cm / 4), (0.0, 0.0), (board_width_cm / 3, board_depth_cm / 4))):
+            builder.add_cylinder_y(
+                f"tray mount standoff {standoff_index + 1}",
+                (center_x + dx, SURFACE_Y + case_bottom_h + 0.48, center_z + dz),
+                0.36,
+                0.56,
+                mount_dark_mat,
+                radius_z=0.36,
+                segments=18,
+            )
+    elif mount_type == "o_ring_mount":
+        ring_y = SURFACE_Y + case_outer_h + 0.12
+        builder.add_box("o-ring front rail", (center_x, ring_y, center_z + board_depth_cm / 2 + 0.36), (board_width_cm + 0.8, 0.13, 0.16), mount_mat, taper=0.04)
+        builder.add_box("o-ring rear rail", (center_x, ring_y, center_z - board_depth_cm / 2 - 0.36), (board_width_cm + 0.8, 0.13, 0.16), mount_mat, taper=0.04)
+        builder.add_box("o-ring left rail", (center_x - board_width_cm / 2 - 0.36, ring_y, center_z), (0.16, 0.13, board_depth_cm + 0.8), mount_mat, taper=0.04)
+        builder.add_box("o-ring right rail", (center_x + board_width_cm / 2 + 0.36, ring_y, center_z), (0.16, 0.13, board_depth_cm + 0.8), mount_mat, taper=0.04)
+    else:
+        for tab_index, dx in enumerate((-board_width_cm / 2 + 2.8, board_width_cm / 2 - 2.8)):
+            builder.add_box(
+                f"top mount tab {tab_index + 1}",
+                (center_x + dx, SURFACE_Y + case_outer_h + 0.10, center_z - board_depth_cm / 2 - 0.15),
+                (2.4, 0.10, 0.44),
+                mount_dark_mat,
+                taper=0.06,
+            )
+
+    plate_y: float | None = None
+    if not show_internals:
+        builder.add_box(
+            "plate rim visible between keycaps",
+            (center_x, SURFACE_Y + case_outer_h - 0.04, center_z),
+            (board_width_cm + 0.35, 0.08, board_depth_cm + 0.35),
+            plate_mat,
+            taper=0.04,
+        )
 
     if show_internals:
         pcb_y = SURFACE_Y + case_bottom_h + 0.12 + pcb_h / 2
@@ -672,41 +907,96 @@ def _add_keyboard_detailed(
         x = (float(key["x"]) - board_width_u / 2 + key_w_u / 2) * U_CM + center_x
         z = (float(key["y"]) - board_depth_u / 2 + key_h_u / 2) * U_CM + center_z
         row = int(min(4, max(1, key["y"] + 1)))
-        angle = math.radians({1: -2, 2: 1, 3: 4, 4: 7}.get(row, 2))
+        angle = _profile_row_angle(profile, row)
 
         if show_internals:
             builder.add_box(
                 f"switch housing {index + 1}",
                 (x, switch_base_y + switch_housing_h / 2, z),
-                (1.40, switch_housing_h, 1.40),
+                (float(switch_family_params["housing_w"]), switch_housing_h, float(switch_family_params["housing_d"])),
                 switch_housing_mat,
                 taper=0.18,
             )
             builder.add_box(
                 f"switch top {index + 1}",
                 (x, switch_base_y + switch_housing_h - 0.18, z),
-                (1.30, 0.35, 1.30),
+                (max(0.95, float(switch_family_params["housing_w"]) - 0.10), 0.35, max(0.95, float(switch_family_params["housing_d"]) - 0.10)),
                 switch_top_mat,
                 taper=0.18,
             )
             builder.add_box(
                 f"switch stem {index + 1}",
                 (x, switch_base_y + switch_housing_h + 0.18, z),
-                (0.65, 0.42, 0.65),
+                switch_family_params["stem"],
                 stem_mat,
                 taper=0.10,
             )
+            if switch_family == "box":
+                builder.add_box(
+                    f"box switch collar {index + 1}",
+                    (x, switch_base_y + switch_housing_h + 0.04, z),
+                    (0.95, 0.12, 0.95),
+                    switch_detail_mat,
+                    taper=0.08,
+                )
+            elif switch_family == "holy_panda":
+                builder.add_box(
+                    f"tactile leaf glint {index + 1}",
+                    (x + 0.48, switch_base_y + switch_housing_h * 0.58, z),
+                    (0.08, 0.50, 0.55),
+                    switch_detail_mat,
+                    taper=0.03,
+                )
+            elif switch_family == "topre":
+                builder.add_cylinder_y(
+                    f"topre rubber dome {index + 1}",
+                    (x, switch_base_y + 0.42, z),
+                    0.92,
+                    0.34,
+                    switch_detail_mat,
+                    radius_z=0.92,
+                    top_radius_x=0.58,
+                    top_radius_z=0.58,
+                    segments=18,
+                )
 
-        material = accent_mat if index in accent_idx or key_w_u >= 2.0 else keycap_mat
+        is_accent = index in accent_idx or key_w_u >= 2.0
+        material = accent_mat if is_accent else keycap_mat
+        side_material = accent_side_mat if is_accent else keycap_side_mat
+        highlight_material = accent_top_highlight_mat if is_accent else keycap_top_highlight_mat
         keycap_y = stem_y + key_height_cm / 2
         keycap_w = max(0.8, key_w_u * U_CM - key_gap_cm)
         keycap_d = max(0.8, key_h_u * U_CM - key_gap_cm)
+        if show_internals and plate_y is not None:
+            builder.add_box(
+                f"plate switch cutout shadow {index + 1}",
+                (x, plate_y + plate_h / 2 + 0.012, z),
+                (min(1.52, keycap_w - 0.15), 0.025, min(1.52, keycap_d - 0.15)),
+                plate_cutout_mat,
+                taper=0.05,
+            )
         builder.add_box(
-            f"keycap {index + 1}",
-            (x, keycap_y, z),
-            (keycap_w, key_height_cm, keycap_d),
+            f"keycap skirt {index + 1}",
+            (x, keycap_y - 0.10, z),
+            (keycap_w, key_height_cm * 0.70, keycap_d),
+            side_material,
+            taper=0.18,
+            rotation_x=angle,
+        )
+        builder.add_box(
+            f"keycap satin top {index + 1}",
+            (x, keycap_y + 0.18, z),
+            (max(0.55, keycap_w - key_top_inset_cm), key_height_cm * 0.42, max(0.55, keycap_d - key_top_inset_cm)),
             material,
-            taper=0.22,
+            taper=key_top_taper,
+            rotation_x=angle,
+        )
+        builder.add_box(
+            f"keycap top highlight {index + 1}",
+            (x - keycap_w * 0.12, keycap_y + key_height_cm / 2 + 0.012, z - keycap_d * 0.10),
+            (max(0.45, keycap_w * 0.54), 0.014, max(0.32, keycap_d * 0.22)),
+            highlight_material,
+            taper=0.12,
             rotation_x=angle,
         )
 
@@ -731,6 +1021,9 @@ def _add_keyboard_detailed(
         "plate_material": plate_material,
         "pcb_color": pcb_color,
         "switch_stem": switch_stem,
+        "switch_family": switch_family,
+        "keycap_profile": keycap_profile,
+        "mount_type": mount_type,
         "show_internals": show_internals,
         "keyboard_unit": "cm",
         "keyboard_source": "MX 1u spacing 19.05mm",
@@ -781,6 +1074,9 @@ def _add_monitor(
     screen_center_y = SURFACE_Y + 34.0
     screen_center_z = center_z - 2.0
     screen_back_z = screen_center_z - screen_thickness / 2 - 0.35
+    screen_front_z = screen_center_z + screen_thickness / 2 + 0.10
+    screen_glare_mat = builder.add_material("monitor glass reflection", "#ffffff", roughness=0.18, metallic=0.0, alpha=0.22, alpha_mode="BLEND")
+    screen_ui_mat = builder.add_material("monitor desktop detail", "#6f86b8", roughness=0.45, metallic=0.0, emissive="#34496f", emissive_strength=0.8)
 
     if with_stand:
         builder.add_box("monitor base", (center_x, _surface_center_y(1.4), screen_center_z + 9.0), (26.0, 1.4, 19.0), stand_mat, taper=0.6)
@@ -811,6 +1107,29 @@ def _add_monitor(
         screen_mat,
         taper=0.08,
     )
+    builder.add_box(
+        "monitor desktop window band",
+        (center_x - screen_w * 0.12, screen_center_y + screen_h * 0.12, screen_front_z),
+        (screen_w * 0.42, screen_h * 0.07, 0.05),
+        screen_ui_mat,
+        taper=0.02,
+    )
+    builder.add_box(
+        "monitor desktop lower panel",
+        (center_x + screen_w * 0.10, screen_center_y - screen_h * 0.18, screen_front_z),
+        (screen_w * 0.52, screen_h * 0.10, 0.05),
+        screen_ui_mat,
+        taper=0.02,
+    )
+    builder.add_box(
+        "monitor diagonal reflection",
+        (center_x + screen_w * 0.18, screen_center_y + screen_h * 0.05, screen_front_z + 0.02),
+        (screen_w * 0.20, screen_h * 0.78, 0.035),
+        screen_glare_mat,
+        taper=0.12,
+        rotation_x=math.radians(-8),
+    )
+    builder.add_cylinder_z("monitor webcam dot", (center_x, screen_center_y + screen_h / 2 - 1.1, screen_front_z + 0.03), 0.25, 0.25, 0.05, bezel_mat, segments=14)
     return {
         "panel_w": screen_w,
         "panel_h": screen_h,
@@ -1086,6 +1405,9 @@ def build_keyboard_scene_glb(
     plate_material: str = "aluminum",
     pcb_color: str = "black",
     switch_stem: str = "red",
+    switch_family: str = "mx",
+    keycap_profile: str = "cherry",
+    mount_type: str = "top_mount",
     show_internals: bool = True,
 ) -> dict:
     layout_data = json.loads(layout_path.read_text(encoding="utf-8"))
@@ -1115,6 +1437,9 @@ def build_keyboard_scene_glb(
         plate_material=plate_material,
         pcb_color=pcb_color,
         switch_stem=switch_stem,
+        switch_family=switch_family,
+        keycap_profile=keycap_profile,
+        mount_type=mount_type,
         show_internals=show_internals,
     )
 
@@ -1148,6 +1473,9 @@ def build_desk_setup_scene_glb(
     plate_material: str = "aluminum",
     pcb_color: str = "black",
     switch_stem: str = "red",
+    switch_family: str = "mx",
+    keycap_profile: str = "cherry",
+    mount_type: str = "top_mount",
     show_internals: bool = False,
     monitor_arm_style: str = "single",
 ) -> dict:
@@ -1197,6 +1525,10 @@ def build_desk_setup_scene_glb(
         alpha=0.55,
         alpha_mode="BLEND",
     )
+    shadow_mat = builder.add_material("soft contact shadow", "#0f172a", roughness=1.0, metallic=0.0, alpha=0.20, alpha_mode="BLEND")
+    wood_grain_mat = builder.add_material("subtle desk wood grain", _mix_hex_color(desk_color, "#4b3621", 0.22), roughness=0.9, metallic=0.0)
+    deskmat_stitch_mat = builder.add_material("deskmat woven stitch", _mix_hex_color(deskmat_color, "#ffffff", 0.16), roughness=0.95, metallic=0.0)
+    grommet_mat = builder.add_material("desk cable grommet dark", "#1f2328", roughness=0.62, metallic=0.08)
 
     if theme == "gaming":
         screen_mat = builder.add_material(
@@ -1246,11 +1578,20 @@ def build_desk_setup_scene_glb(
         (desk_width - 0.6, 0.4, 0.5),
         desk_edge_mat,
     )
+    _add_desk_surface_details(
+        builder,
+        desk_width=desk_width,
+        desk_depth=desk_depth,
+        grain_mat=wood_grain_mat,
+        edge_mat=desk_edge_mat,
+        grommet_mat=grommet_mat,
+    )
     # Deskmat sized relative to the keyboard footprint, centered slightly forward.
     deskmat_w = min(desk_width - 16.0, 95.0)
     deskmat_d = min(desk_depth - 10.0, 38.0)
     deskmat_z = max(min(front_z - deskmat_d / 2 - 6.0, 12.0), 5.0)
     builder.add_box("deskmat", (0, SURFACE_Y + 0.18, deskmat_z), (deskmat_w, 0.35, deskmat_d), deskmat_mat, taper=0.8)
+    _add_deskmat_details(builder, center_z=deskmat_z, width=deskmat_w, depth=deskmat_d, stitch_mat=deskmat_stitch_mat)
 
     keyboard_center_z = deskmat_z + 3.0
     keyboard_meta = _add_keyboard_detailed(
@@ -1264,12 +1605,23 @@ def build_desk_setup_scene_glb(
         plate_material=plate_material,
         pcb_color=pcb_color,
         switch_stem=switch_stem,
+        switch_family=switch_family,
+        keycap_profile=keycap_profile,
+        mount_type=mount_type,
         show_internals=show_internals,
     )
 
     placer = DeskPlacer(desk_width=desk_width, desk_depth=desk_depth, margin=1.5)
     case_w = keyboard_meta["case_outer_width"]
     case_d = keyboard_meta["case_outer_depth"]
+    _add_contact_shadow(
+        builder,
+        name="keyboard soft deskmat shadow",
+        center=(0, keyboard_center_z),
+        size=(case_w + 2.8, case_d + 2.2),
+        material=shadow_mat,
+        y=SURFACE_Y + 0.46,
+    )
     placer.reserve(0, keyboard_center_z, case_w, case_d, "keyboard")
 
     # Monitor + arm placement reserved at the back so other accessories steer clear.
@@ -1319,6 +1671,7 @@ def build_desk_setup_scene_glb(
         mouse_x = min(case_w / 2 + 8.0, desk_width / 2 - 6.0)
         mouse_z = keyboard_center_z + 1.0
         placer.reserve(mouse_x, mouse_z, 6.4, 11.0, "mouse")
+        _add_contact_shadow(builder, name="mouse soft deskmat shadow", center=(mouse_x, mouse_z), size=(7.0, 12.0), material=shadow_mat, y=SURFACE_Y + 0.46)
         _add_mouse(builder, center=(mouse_x, mouse_z), mouse_mat=mouse_mat, detail_mat=mouse_detail_mat, accent_mat=mouse_accent_mat)
 
     # Dynamic placement for accessories using DeskPlacer slots.
@@ -1327,6 +1680,14 @@ def build_desk_setup_scene_glb(
         if slot is None:
             return None
         placer.reserve(slot[0], slot[1], size[0], size[1], asset_id)
+        _add_contact_shadow(
+            builder,
+            name=f"{asset_id} soft tabletop shadow",
+            center=slot,
+            size=(max(2.0, size[0] * 0.92), max(2.0, size[1] * 0.92)),
+            material=shadow_mat,
+            y=SURFACE_Y + 0.07,
+        )
         return slot
 
     if "desk_lamp" in enabled_assets:

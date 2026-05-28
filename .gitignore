@@ -1,9 +1,25 @@
 
 
-# Local secrets
+# Local secrets - never commit any of these
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*_secret*
+*_token*
+# Whitelist: legitimate security tooling, not actual secrets
+!deskad_keyboard_demo/tools/scan_secrets.py
+.netrc
+.npmrc
+
+# Editor / backup leftovers that might contain old secrets
+*.bak
+*.swp
+*.swo
+*~
 
 # Python/runtime noise
 __pycache__/
@@ -23,6 +39,9 @@ deskad_keyboard_demo/static/models/keyboard_*.glb
 deskad_keyboard_demo/static/models/uploaded_*.glb
 deskad_keyboard_demo/training/output/
 deskad_keyboard_demo/training/datasets/
+
+# Runtime job stores / quality reports
+deskad_keyboard_demo/data/runtime/
 
 # Large local model artifacts
 models/

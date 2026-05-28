@@ -109,6 +109,9 @@ DEFAULTS = {
     "plate_material": "aluminum",
     "pcb_color": "black",
     "switch_stem": "red",
+    "switch_family": "mx",
+    "keycap_profile": "cherry",
+    "mount_type": "top_mount",
     "show_internals": False,
     "monitor_arm_style": "single",
     "desk_preset": "120 x 60 cm",
@@ -121,8 +124,13 @@ DEFAULTS = {
     "model_meta": None,
     "uploaded_model_url": None,
     "uploaded_model_meta": None,
+    "library_model_path": None,
+    "selected_reference_path": None,
     "copy_result": None,
+    "copy_experiment_result": None,
     "poster_result": None,
+    "image_job_result": None,
+    "image_quality_report": None,
     "ad_tone": "감성형",
     "image_ratio": "1:1",
     "extra_request": "깔끔하고 고급스러운 데스크셋업 광고 느낌",
@@ -162,6 +170,28 @@ SWITCH_STEM_LABELS = {
     "silent_red": "Silent Red (정음)",
     "tactile_purple": "Holy Panda 계열 (Tactile)",
     "linear_black": "Black (Linear, 무거움)",
+}
+
+SWITCH_FAMILY_LABELS = {
+    "mx": "MX 호환",
+    "box": "BOX 구조",
+    "holy_panda": "Holy Panda 계열",
+    "topre": "Topre 러버돔",
+}
+
+KEYCAP_PROFILE_LABELS = {
+    "cherry": "Cherry (낮은 스텝스컬프)",
+    "oem": "OEM (기본 높이)",
+    "xda": "XDA (균일 저상)",
+    "sa": "SA (높은 레트로)",
+    "mda": "MDA (둥근 중간 높이)",
+}
+
+MOUNT_TYPE_LABELS = {
+    "top_mount": "Top mount",
+    "tray_mount": "Tray mount",
+    "gasket_mount": "Gasket mount",
+    "o_ring_mount": "O-ring mount",
 }
 
 MONITOR_ARM_LABELS = {
@@ -283,7 +313,25 @@ def fetch_security_config() -> dict:
     try:
         return api_get("/security/config")
     except Exception:
-        return {"openai_api_key": "unknown", "local_llm_base_url": "unknown", "step_converter_cmd": "unknown"}
+        return {
+            "openai_api_key": "unknown",
+            "local_llm_base_url": "unknown",
+            "hyperclova_base_url": "unknown",
+            "kanana_base_url": "unknown",
+            "midm_base_url": "unknown",
+            "local_image_endpoint": "unknown",
+            "comfyui_base_url": "unknown",
+            "image_model_backend": "unknown",
+            "step_converter_cmd": "unknown",
+        }
+
+
+@st.cache_data(ttl=15)
+def fetch_ai_providers() -> dict:
+    try:
+        return api_get("/ai/providers")
+    except Exception:
+        return {"providers": [], "auto_order": []}
 
 
 @st.cache_data(ttl=30)
@@ -292,6 +340,22 @@ def fetch_desk_assets() -> list[dict]:
         return api_get("/assets/desk")["assets"]
     except Exception:
         return FALLBACK_ASSETS
+
+
+@st.cache_data(ttl=30)
+def fetch_reference_assets() -> list[dict]:
+    try:
+        return api_get("/assets/references")["references"]
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=30)
+def fetch_model_library() -> dict:
+    try:
+        return api_get("/models/library")
+    except Exception:
+        return {"files": [], "model_compatible_extensions": []}
 
 
 def sync_layout_from_model() -> None:
@@ -370,9 +434,17 @@ def build_render_payload() -> dict:
         "plate_material": st.session_state.plate_material,
         "pcb_color": st.session_state.pcb_color,
         "switch_stem": st.session_state.switch_stem,
+        "switch_family": st.session_state.switch_family,
+        "keycap_profile": st.session_state.keycap_profile,
+        "mount_type": st.session_state.mount_type,
         "show_internals": st.session_state.show_internals,
         "monitor_arm_style": st.session_state.monitor_arm_style,
     }
+
+
+def current_image_job_id() -> str | None:
+    current = st.session_state.image_job_result or {}
+    return (current.get("job") or {}).get("job_id")
 
 
 def build_ad_payload() -> dict:
@@ -388,6 +460,8 @@ def build_ad_payload() -> dict:
         "image_ratio": st.session_state.image_ratio,
         "extra_request": st.session_state.extra_request,
         "model_url": st.session_state.model_url,
+        "reference_asset_path": st.session_state.selected_reference_path,
+        "image_job_id": current_image_job_id(),
         "poster_template": st.session_state.poster_template,
     }
 
@@ -409,14 +483,38 @@ def upload_reference_model(uploaded_file) -> None:
     st.session_state.uploaded_model_meta = data
 
 
+def prepare_library_model(path: str) -> None:
+    data = api_post("/models/library/prepare", {"path": path}, timeout=45)
+    st.session_state.uploaded_model_url = data["model_url"]
+    st.session_state.uploaded_model_meta = data
+
+
 def generate_copy() -> None:
     st.session_state.copy_result = api_post("/ai/copy", build_ad_payload(), timeout=45)
+
+
+def generate_copy_experiment() -> None:
+    payload = {**build_ad_payload(), "providers": ["kanana", "midm", "local", "fallback"]}
+    st.session_state.copy_experiment_result = api_post("/ai/copy/experiment", payload, timeout=90)
 
 
 def generate_poster() -> None:
     data = api_post("/ai/poster", build_ad_payload(), timeout=60)
     st.session_state.poster_result = data
     st.session_state.copy_result = data["copy"]
+
+
+def generate_image_job() -> None:
+    data = api_post("/ai/image/jobs", build_ad_payload(), timeout=60)
+    st.session_state.image_job_result = data
+    st.session_state.copy_result = data["copy"]
+
+
+def refresh_image_job() -> None:
+    current = st.session_state.image_job_result or {}
+    job_id = (current.get("job") or {}).get("job_id")
+    if job_id:
+        st.session_state.image_job_result = api_get(f"/ai/image/jobs/{job_id}", timeout=30)
 
 
 def go_next() -> None:
@@ -533,6 +631,54 @@ with left_col:
                         st.success("업로드 모델 준비 완료")
                     except Exception as exc:
                         st.error(f"업로드 처리 실패: {exc}")
+
+            with st.expander("공용 모델/도면 라이브러리", expanded=True):
+                references = fetch_reference_assets()
+                downloaded_refs = [item for item in references if item.get("downloaded")]
+                st.caption(f"노션 리서치 기반 레퍼런스 {len(references)}개 · 다운로드 완료 {len(downloaded_refs)}개")
+                if downloaded_refs:
+                    ref_options = {item["path"]: item for item in downloaded_refs if item.get("path")}
+                    if st.session_state.selected_reference_path not in ref_options:
+                        st.session_state.selected_reference_path = next(iter(ref_options), None)
+                    selected_ref = st.selectbox(
+                        "다운로드된 도면/레퍼런스",
+                        options=list(ref_options.keys()),
+                        key="selected_reference_path",
+                        format_func=lambda value: f"{ref_options[value].get('label', value)} · {ref_options[value].get('license', 'license check')}",
+                    )
+                    ref_item = ref_options.get(selected_ref, {})
+                    st.caption(f"출처: {ref_item.get('source_url', '')}")
+                else:
+                    st.caption("아직 다운로드된 노션 레퍼런스가 없습니다. 다운로드 스크립트 실행 후 표시됩니다.")
+
+                library = fetch_model_library()
+                shared_status = library.get("shared", {})
+                st.caption(
+                    f"공용 데이터: {shared_status.get('shared_data_dir', '/opt/shared_data')} "
+                    f"({'있음' if shared_status.get('shared_data_exists') else '없음'}) · "
+                    f"공용 모델: {shared_status.get('shared_model_dir', '/opt/shared_model')} "
+                    f"({'있음' if shared_status.get('shared_model_exists') else '없음'})"
+                )
+                compatible = {".glb", ".step", ".stp"}
+                files = [item for item in library.get("files", []) if item.get("extension") in compatible]
+                if files:
+                    file_options = {item["path"]: item for item in files}
+                    if st.session_state.library_model_path not in file_options:
+                        st.session_state.library_model_path = next(iter(file_options), None)
+                    selected_file = st.selectbox(
+                        "FastAPI 미리보기 모델",
+                        options=list(file_options.keys()),
+                        key="library_model_path",
+                        format_func=lambda value: f"{file_options[value].get('name', value)} · {file_options[value].get('kind', 'file')}",
+                    )
+                    if st.button("공용 모델 미리보기", use_container_width=True):
+                        try:
+                            prepare_library_model(selected_file)
+                            st.success("공용 모델 준비 완료")
+                        except Exception as exc:
+                            st.error(f"공용 모델 처리 실패: {exc}")
+                else:
+                    st.caption("/opt/shared_model 또는 static/models에 GLB/STEP/STP 파일을 넣으면 여기서 바로 FastAPI 미리보기에 연결됩니다.")
             model_info = KEYBOARD_MODEL_DEFAULTS[st.session_state.keyboard_model]
             st.info(f"기본값: {st.session_state.keyboard_model} / {model_info['layout']} 배열\n\n{model_info['description']}")
 
@@ -563,6 +709,28 @@ with left_col:
                         list(SWITCH_STEM_LABELS.keys()),
                         index=list(SWITCH_STEM_LABELS.keys()).index(st.session_state.switch_stem),
                         format_func=lambda k: SWITCH_STEM_LABELS[k],
+                    )
+                detail_a, detail_b, detail_c = st.columns(3)
+                with detail_a:
+                    st.session_state.switch_family = st.selectbox(
+                        "스위치 구조",
+                        list(SWITCH_FAMILY_LABELS.keys()),
+                        index=list(SWITCH_FAMILY_LABELS.keys()).index(st.session_state.switch_family),
+                        format_func=lambda k: SWITCH_FAMILY_LABELS[k],
+                    )
+                with detail_b:
+                    st.session_state.keycap_profile = st.selectbox(
+                        "키캡 프로파일",
+                        list(KEYCAP_PROFILE_LABELS.keys()),
+                        index=list(KEYCAP_PROFILE_LABELS.keys()).index(st.session_state.keycap_profile),
+                        format_func=lambda k: KEYCAP_PROFILE_LABELS[k],
+                    )
+                with detail_c:
+                    st.session_state.mount_type = st.selectbox(
+                        "마운트 방식",
+                        list(MOUNT_TYPE_LABELS.keys()),
+                        index=list(MOUNT_TYPE_LABELS.keys()).index(st.session_state.mount_type),
+                        format_func=lambda k: MOUNT_TYPE_LABELS[k],
                     )
                 st.session_state.show_internals = st.checkbox(
                     "내부 구조(보강판/PCB/스위치) 렌더 노출",
@@ -635,7 +803,9 @@ with left_col:
                 st.caption("렌더 단위: 1 GLB unit = 1 cm  |  1u = 1.905 cm")
                 st.caption(f"케이스: {CASE_FINISH_LABELS[st.session_state.case_finish]}")
                 st.caption(f"보강판: {PLATE_MATERIAL_LABELS[st.session_state.plate_material]}")
-                st.caption(f"스위치: {SWITCH_STEM_LABELS[st.session_state.switch_stem]}")
+                st.caption(f"스위치: {SWITCH_STEM_LABELS[st.session_state.switch_stem]} · {SWITCH_FAMILY_LABELS[st.session_state.switch_family]}")
+                st.caption(f"키캡: {KEYCAP_PROFILE_LABELS[st.session_state.keycap_profile]}")
+                st.caption(f"마운트: {MOUNT_TYPE_LABELS[st.session_state.mount_type]}")
             color_a, color_b = st.columns(2)
             with color_a:
                 st.session_state.case_color = st.color_picker("하우징", st.session_state.case_color)
@@ -667,25 +837,50 @@ with left_col:
                     format_func=lambda k: POSTER_TEMPLATE_LABELS[k],
                 )
                 config_now = fetch_security_config()
-                local_llm_status = "🟢" if config_now.get("local_llm_base_url") == "set" else "⚪"
-                openai_status = "🟢" if config_now.get("openai_api_key") == "set" else "⚪"
-                local_img_status = "🟢" if config_now.get("local_image_endpoint") == "set" else "⚪"
-                st.caption(f"AI: OpenAI {openai_status}  Local LLM {local_llm_status}  Local Image {local_img_status}")
+                local_llm_status = "on" if config_now.get("local_llm_base_url") == "set" else "off"
+                hyperclova_status = "on" if config_now.get("hyperclova_base_url") == "set" else "off"
+                kanana_status = "on" if config_now.get("kanana_base_url") == "set" else "off"
+                midm_status = "on" if config_now.get("midm_base_url") == "set" else "off"
+                openai_status = "on" if config_now.get("openai_api_key") == "set" else "off"
+                local_img_status = "on" if config_now.get("local_image_endpoint") == "set" else "off"
+                comfyui_status = "on" if config_now.get("comfyui_base_url") == "set" else "off"
+                st.caption(
+                    f"AI: OpenAI {openai_status} · Local {local_llm_status} · HyperCLOVA {hyperclova_status} · "
+                    f"Kanana {kanana_status} · Mi:dm {midm_status}"
+                )
+                st.caption(f"Image {config_now.get('image_model_backend', 'auto')} / local {local_img_status} / ComfyUI {comfyui_status}")
             st.session_state.extra_request = st.text_area("추가 요청", st.session_state.extra_request, height=110)
 
-            col_copy, col_poster = st.columns(2)
+            col_copy, col_exp, col_image, col_poster = st.columns(4)
             if col_copy.button("광고 문구 생성", type="secondary", use_container_width=True):
                 try:
                     generate_copy()
                     st.success("광고 문구 생성 완료")
                 except Exception as exc:
                     st.error(f"문구 생성 실패: {exc}")
+            if col_exp.button("한글 모델 비교", type="secondary", use_container_width=True):
+                try:
+                    generate_copy_experiment()
+                    st.success("모델 비교 완료")
+                except Exception as exc:
+                    st.error(f"모델 비교 실패: {exc}")
+            if col_image.button("실사 이미지 작업", type="secondary", use_container_width=True):
+                try:
+                    generate_image_job()
+                    st.success("이미지 작업 생성 완료")
+                except Exception as exc:
+                    st.error(f"이미지 작업 실패: {exc}")
             if col_poster.button("포스터 생성", type="primary", use_container_width=True):
                 try:
                     generate_poster()
                     st.success("포스터 생성 완료")
                 except Exception as exc:
                     st.error(f"포스터 생성 실패: {exc}")
+
+            providers = fetch_ai_providers().get("providers", [])
+            if providers:
+                configured = [item["id"] for item in providers if item.get("configured") and item.get("id") != "fallback"]
+                st.caption(f"사용 가능 provider: {', '.join(configured) if configured else 'fallback only'}")
 
     nav_a, nav_b = st.columns(2)
     if nav_a.button("이전", use_container_width=True, disabled=st.session_state.step <= 1):
@@ -764,11 +959,50 @@ with result_col:
                 with st.expander("이미지 생성 프롬프트", expanded=False):
                     st.write(poster["image_prompt"])
                 if poster.get("local_image_reference"):
-                    with st.expander("로컬 이미지 모델 응답", expanded=False):
+                    with st.expander("이미지 모델 응답", expanded=False):
                         st.json(poster["local_image_reference"])
             else:
                 st.write("광고 콘텐츠 단계에서 `포스터 생성`을 누르면 SVG 포스터와 생성 프롬프트가 표시됩니다.")
                 st.caption("로컬 이미지 모델 (LOCAL_IMAGE_ENDPOINT) 이 설정되어 있으면 생성된 이미지가 포스터에 직접 합성됩니다.")
+
+            image_job_result = st.session_state.image_job_result
+            if image_job_result:
+                job = image_job_result.get("job", {})
+                job_id = job.get("job_id")
+                with st.expander("실사 이미지 작업 상태", expanded=job.get("status") not in {"completed", "not_configured"}):
+                    st.caption(f"{job.get('provider', 'fallback')} · {job.get('status', 'unknown')} · {job.get('width', '')}×{job.get('height', '')}")
+                    col_refresh, col_quality = st.columns(2)
+                    if col_refresh.button("이미지 작업 상태 갱신", use_container_width=True):
+                        try:
+                            refresh_image_job()
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"상태 확인 실패: {exc}")
+                    if col_quality.button(
+                        "이미지 품질 검사 실행",
+                        use_container_width=True,
+                        disabled=job.get("status") != "completed" or not job_id,
+                    ):
+                        try:
+                            st.session_state.image_quality_report = api_post(
+                                f"/ai/image/jobs/{job_id}/quality", {}, timeout=30
+                            )
+                        except Exception as exc:
+                            st.error(f"품질 검사 실패: {exc}")
+                    st.json(job)
+                if job.get("status") == "completed":
+                    st.caption("완료된 이미지 작업은 다음 포스터 생성 시 자동 합성 후보로 사용됩니다.")
+                quality = st.session_state.get("image_quality_report")
+                if quality and quality.get("report"):
+                    report = quality["report"]
+                    with st.expander("이미지 품질 검사 결과", expanded=False):
+                        st.caption(
+                            f"{report.get('evaluator', 'skeleton')} · "
+                            f"{report.get('width', '')}×{report.get('height', '')} · "
+                            f"{report.get('aspect_ratio_actual', 'unknown')} · "
+                            f"{(report.get('bytes') or 0) // 1024}KB"
+                        )
+                        st.json(report)
 
         st.divider()
 
@@ -789,3 +1023,17 @@ with result_col:
                     st.caption(f"fallback note: {result['error']}")
             else:
                 st.caption("광고 콘텐츠 단계에서 문구를 생성하면 여기에 표시됩니다.")
+
+            experiment = st.session_state.copy_experiment_result
+            if experiment:
+                with st.expander("한글 모델 비교 결과", expanded=False):
+                    for item in experiment.get("results", []):
+                        st.markdown(f"**{item.get('provider')}** · {item.get('status')}")
+                        copy = item.get("copy") or {}
+                        if copy:
+                            st.write(copy.get("headline", ""))
+                            st.caption(" / ".join(copy.get("copies", [])[:2]))
+                        elif item.get("error"):
+                            st.caption(item["error"])
+                        else:
+                            st.caption(item.get("model", "not configured"))

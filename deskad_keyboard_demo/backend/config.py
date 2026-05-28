@@ -34,6 +34,13 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     api_base_url: str = os.getenv("DESKAD_API_BASE", "http://127.0.0.1:8000")
@@ -45,11 +52,37 @@ class Settings:
     openai_image_model: str = os.getenv("OPENAI_IMAGE_MODEL", "")
     local_llm_base_url: str = os.getenv("LOCAL_LLM_BASE_URL", "")
     local_llm_model: str = os.getenv("LOCAL_LLM_MODEL", "")
+    hyperclova_base_url: str = os.getenv("HYPERCLOVA_BASE_URL", "")
+    hyperclova_api_key: str = os.getenv("HYPERCLOVA_API_KEY", "")
+    hyperclova_model: str = os.getenv("HYPERCLOVA_MODEL", "")
+    hyperclova_use_direct: bool = _bool_env("HYPERCLOVA_USE_DIRECT_API", False)
+    hyperclova_apigw_key: str = os.getenv("HYPERCLOVA_APIGW_KEY", "")
+    kanana_base_url: str = os.getenv("KANANA_BASE_URL", "")
+    kanana_api_key: str = os.getenv("KANANA_API_KEY", "")
+    kanana_model: str = os.getenv("KANANA_MODEL", "")
+    midm_base_url: str = os.getenv("MIDM_BASE_URL", "")
+    midm_api_key: str = os.getenv("MIDM_API_KEY", "")
+    midm_model: str = os.getenv("MIDM_MODEL", "")
     local_image_endpoint: str = os.getenv("LOCAL_IMAGE_ENDPOINT", "")
+    image_model_backend: str = os.getenv("IMAGE_MODEL_BACKEND", "auto")
+    comfyui_base_url: str = os.getenv("COMFYUI_BASE_URL", "")
+    comfyui_workflow_path: str = os.getenv("COMFYUI_WORKFLOW_PATH", "")
+    flux_model_variant: str = os.getenv("FLUX_MODEL_VARIANT", "")
+    image_quantization: str = os.getenv("IMAGE_QUANTIZATION", "")
+    enable_vae_tiling: bool = _bool_env("ENABLE_VAE_TILING", False)
+    enable_xformers: bool = _bool_env("ENABLE_XFORMERS", False)
     request_timeout_seconds: int = _int_env("AI_REQUEST_TIMEOUT_SECONDS", 45)
     max_upload_mb: int = _int_env("MAX_UPLOAD_MB", 60)
+    shared_data_dir: str = os.getenv("DESKAD_SHARED_DATA_DIR", "/opt/shared_data")
+    shared_model_dir: str = os.getenv("DESKAD_SHARED_MODEL_DIR", "/opt/shared_model")
     step_converter_cmd: str = os.getenv("STEP_CONVERTER_CMD", "")
     step_converter_timeout_seconds: int = _int_env("STEP_CONVERTER_TIMEOUT_SECONDS", 120)
+    cors_origins_raw: str = os.getenv("DESKAD_CORS_ORIGINS", "")
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Allowed Origin headers. Empty list means same-origin only (no CORS responses)."""
+        return [origin.strip() for origin in self.cors_origins_raw.split(",") if origin.strip()]
 
     @property
     def has_openai_key(self) -> bool:
@@ -60,8 +93,28 @@ class Settings:
         return bool(self.local_llm_base_url)
 
     @property
+    def has_hyperclova(self) -> bool:
+        return bool(self.hyperclova_base_url and self.hyperclova_api_key)
+
+    @property
+    def has_hyperclova_direct(self) -> bool:
+        return bool(self.hyperclova_use_direct and self.hyperclova_base_url and self.hyperclova_api_key)
+
+    @property
+    def has_kanana(self) -> bool:
+        return bool(self.kanana_base_url)
+
+    @property
+    def has_midm(self) -> bool:
+        return bool(self.midm_base_url)
+
+    @property
     def has_local_image(self) -> bool:
         return bool(self.local_image_endpoint)
+
+    @property
+    def has_comfyui(self) -> bool:
+        return bool(self.comfyui_base_url)
 
 
 @lru_cache(maxsize=1)
@@ -70,18 +123,45 @@ def get_settings() -> Settings:
 
 
 def redacted_settings() -> dict:
+    """Return Settings as a dict with secret fields masked.
+
+    Secret detection delegates to backend.security so logs/responses/CLI dumps
+    all share the same definition of "sensitive".
+    """
+    from .security import mask_value
+
     settings = get_settings()
     return {
         "api_base_url": settings.api_base_url,
         "public_api_base_url": settings.public_api_base_url,
         "ai_provider": settings.ai_provider,
-        "openai_api_key": "set" if settings.openai_api_key else "missing",
+        "openai_api_key": mask_value(settings.openai_api_key),
         "openai_base_url": settings.openai_base_url,
         "openai_text_model": settings.openai_text_model,
         "openai_image_model": settings.openai_image_model or "disabled",
         "local_llm_base_url": "set" if settings.local_llm_base_url else "missing",
         "local_llm_model": settings.local_llm_model or "default",
+        "hyperclova_base_url": "set" if settings.hyperclova_base_url else "missing",
+        "hyperclova_api_key": mask_value(settings.hyperclova_api_key),
+        "hyperclova_model": settings.hyperclova_model or "default",
+        "hyperclova_use_direct": settings.hyperclova_use_direct,
+        "hyperclova_apigw_key": mask_value(settings.hyperclova_apigw_key),
+        "kanana_base_url": "set" if settings.kanana_base_url else "missing",
+        "kanana_api_key": mask_value(settings.kanana_api_key),
+        "kanana_model": settings.kanana_model or "default",
+        "midm_base_url": "set" if settings.midm_base_url else "missing",
+        "midm_api_key": mask_value(settings.midm_api_key),
+        "midm_model": settings.midm_model or "default",
         "local_image_endpoint": "set" if settings.local_image_endpoint else "missing",
+        "image_model_backend": settings.image_model_backend,
+        "comfyui_base_url": "set" if settings.comfyui_base_url else "missing",
+        "comfyui_workflow_path": "set" if settings.comfyui_workflow_path else "missing",
+        "flux_model_variant": settings.flux_model_variant or "unset",
+        "image_quantization": settings.image_quantization or "unset",
+        "enable_vae_tiling": settings.enable_vae_tiling,
+        "enable_xformers": settings.enable_xformers,
         "max_upload_mb": settings.max_upload_mb,
+        "shared_data_dir": settings.shared_data_dir,
+        "shared_model_dir": settings.shared_model_dir,
         "step_converter_cmd": "set" if settings.step_converter_cmd else "missing",
     }
