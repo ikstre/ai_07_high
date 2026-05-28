@@ -16,17 +16,18 @@ APP_DIR = Path(__file__).resolve().parent
 def load_env_file(path: Path) -> None:
     if not path.exists():
         return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        os.environ[key.strip()] = value.strip().strip('"').strip("'")
 
 
 load_env_file(APP_DIR / ".env")
 API_BASE = os.getenv("DESKAD_API_BASE", "http://127.0.0.1:8000").rstrip("/")
 PUBLIC_API_BASE = os.getenv("DESKAD_PUBLIC_API_BASE", API_BASE).rstrip("/")
+SECURITY_CONFIG_TTL_SECONDS = 30
 
 
 st.set_page_config(
@@ -124,7 +125,7 @@ DEFAULTS = {
     "copy_result": None,
     "poster_result": None,
     "ad_tone": "감성형",
-    "image_ratio": "1:1",
+    "image_ratio": "4:5",
     "extra_request": "깔끔하고 고급스러운 데스크셋업 광고 느낌",
     "poster_template": "minimal_card",
 }
@@ -278,12 +279,47 @@ def fetch_text_asset(url: str) -> str:
     return response.text
 
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=SECURITY_CONFIG_TTL_SECONDS)
 def fetch_security_config() -> dict:
     try:
-        return api_get("/security/config")
+        return api_get("/security/config", timeout=2)
     except Exception:
-        return {"openai_api_key": "unknown", "local_llm_base_url": "unknown", "step_converter_cmd": "unknown"}
+        return {
+            "openai_api_key": "unknown",
+            "local_llm_base_url": "unknown",
+            "local_image_endpoint": "unknown",
+            "step_converter_cmd": "unknown",
+        }
+
+
+def _security_status_fragment(func):
+    """Streamlit fragment가 있는 버전에서는 보안 상태 영역만 주기적으로 새로 그린다."""
+    if hasattr(st, "fragment"):
+        return st.fragment(run_every=f"{SECURITY_CONFIG_TTL_SECONDS}s")(func)
+    return func
+
+
+@_security_status_fragment
+def render_security_status_panel() -> None:
+    """사이드바의 API/보안 상태를 TTL 캐시 기반으로 표시한다."""
+    config = fetch_security_config()
+    with st.expander("API / 보안 상태", expanded=True):
+        st.caption(f"OpenAI Key: {config.get('openai_api_key', 'unknown')}")
+        st.caption(f"Local LLM: {config.get('local_llm_base_url', 'unknown')}")
+        st.caption("Drawing mode: representative presets only")
+        st.caption(f"STEP Converter: {config.get('step_converter_cmd', 'unknown')}")
+        st.caption(f"Drawing Converter: {config.get('drawing_converter_cmd', 'unknown')}")
+        st.caption("?? ? ?? ??? API ??? ???? ????.")
+
+
+@_security_status_fragment
+def render_inline_ai_status() -> None:
+    """광고 생성 패널의 AI 연결 상태를 생성 버튼 실행과 분리해서 표시한다."""
+    config_now = fetch_security_config()
+    local_llm_status = "🟢" if config_now.get("local_llm_base_url") == "set" else "⚪"
+    openai_status = "🟢" if config_now.get("openai_api_key") == "set" else "⚪"
+    local_img_status = "🟢" if config_now.get("local_image_endpoint") == "set" else "⚪"
+    st.caption(f"AI: OpenAI {openai_status}  Local LLM {local_llm_status}  Local Image {local_img_status}")
 
 
 @st.cache_data(ttl=30)
@@ -449,12 +485,7 @@ with st.sidebar:
 
     st.divider()
 
-    config = fetch_security_config()
-    with st.expander("API / 보안 상태", expanded=True):
-        st.caption(f"OpenAI Key: {config.get('openai_api_key', 'unknown')}")
-        st.caption(f"Local LLM: {config.get('local_llm_base_url', 'unknown')}")
-        st.caption(f"STEP Converter: {config.get('step_converter_cmd', 'unknown')}")
-        st.caption("실제 키 값은 화면과 API 응답에 노출하지 않습니다.")
+    render_security_status_panel()
 
     with st.expander("도면 데이터", expanded=True):
         st.checkbox("키보드 하우징", value=True)
@@ -658,7 +689,7 @@ with left_col:
             ad_a, ad_b = st.columns(2)
             with ad_a:
                 st.session_state.ad_tone = st.selectbox("광고 톤", ["프리미엄형", "감성형", "할인형", "기능강조형"])
-                st.session_state.image_ratio = st.selectbox("이미지 비율", ["1:1", "4:5", "16:9"])
+                st.session_state.image_ratio = st.selectbox("이미지 비율", ["4:5", "1:1", "16:9"])
             with ad_b:
                 st.session_state.poster_template = st.selectbox(
                     "포스터 템플릿",
@@ -666,11 +697,7 @@ with left_col:
                     index=list(POSTER_TEMPLATE_LABELS.keys()).index(st.session_state.poster_template),
                     format_func=lambda k: POSTER_TEMPLATE_LABELS[k],
                 )
-                config_now = fetch_security_config()
-                local_llm_status = "🟢" if config_now.get("local_llm_base_url") == "set" else "⚪"
-                openai_status = "🟢" if config_now.get("openai_api_key") == "set" else "⚪"
-                local_img_status = "🟢" if config_now.get("local_image_endpoint") == "set" else "⚪"
-                st.caption(f"AI: OpenAI {openai_status}  Local LLM {local_llm_status}  Local Image {local_img_status}")
+                render_inline_ai_status()
             st.session_state.extra_request = st.text_area("추가 요청", st.session_state.extra_request, height=110)
 
             col_copy, col_poster = st.columns(2)
