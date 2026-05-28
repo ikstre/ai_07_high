@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -36,6 +36,7 @@ install_secret_log_filter()
 from .assets import enabled_asset_ids, load_desk_assets
 from .cad import copy_existing_glb, handle_model_upload_bytes
 from .config import get_settings, redacted_settings
+from .drawing_converter import convert_plate_drawing_to_glb
 from .library import (
     load_reference_manifest,
     list_library_files,
@@ -45,6 +46,7 @@ from .library import (
     shared_library_status,
     shared_model_dir,
 )
+from .plates import get_plate, get_plate_preview_path, keyboard_layout_repo_path, list_plate_brands, search_plates
 from .renderer import build_desk_setup_scene_glb, build_keyboard_scene_glb
 
 
@@ -77,6 +79,7 @@ app.mount("/shared/models", StaticFiles(directory=shared_model_dir(), check_dir=
 
 
 class KeyboardRenderRequest(BaseModel):
+    """키보드 단품 렌더링 요청에서 공통 색상, 레이아웃, 내부 옵션을 검증한다."""
     layout: str = Field(default="65")
     case_color: str = Field(default="#c8c1b2")
     keycap_color: str = Field(default="#f4ead7")
@@ -96,6 +99,7 @@ class KeyboardRenderRequest(BaseModel):
 
 
 class DeskSetupRenderRequest(KeyboardRenderRequest):
+    """전체 데스크 셋업 렌더링 요청에서 책상, 모니터, 액세서리 옵션을 검증한다."""
     assets: list[str] = Field(default_factory=enabled_asset_ids)
     desk_width: float = Field(default=120.0, ge=100.0, le=200.0)
     desk_depth: float = Field(default=60.0, ge=50.0, le=90.0)
@@ -105,6 +109,7 @@ class DeskSetupRenderRequest(KeyboardRenderRequest):
 
 
 class AdContentRequest(DeskSetupRenderRequest):
+    """광고 문구와 포스터 생성을 위한 상품/타깃/렌더링 정보를 검증한다."""
     product_name: str = Field(default="크림 베이지 65% 커스텀 키보드", max_length=80)
     product_type: str = Field(default="커스텀 키보드", max_length=40)
     price: str = Field(default="189,000원", max_length=30)
@@ -121,6 +126,7 @@ class AdContentRequest(DeskSetupRenderRequest):
 
 
 class UploadedModelRequest(BaseModel):
+    """업로드 모델 파일명과 base64 본문을 검증한다."""
     filename: str = Field(max_length=255, pattern=r"^[^/\\\x00]+$")
     content_base64: str = Field(max_length=120_000_000)
 
@@ -136,29 +142,47 @@ class CopyExperimentRequest(AdContentRequest):
     providers: list[str] = Field(default_factory=lambda: ["kanana", "midm", "local", "fallback"])
 
 
+class PlateDrawingRenderRequest(BaseModel):
+    """키보드 플레이트 도면을 GLB로 변환하기 위한 plate id를 검증한다."""
+    plate_id: str = Field(max_length=120, pattern=r"^[A-Za-z0-9_\-./]+$")
+
+
 def _settings_base_url() -> str:
+    """설정된 public API base URL을 정규화해 static URL 생성에 사용한다."""
     return get_settings().public_api_base_url.rstrip("/")
 
 
 def _layout_path(layout: str) -> Path:
+    """요청한 레이아웃 JSON 파일을 찾고 없으면 기본 65 배열로 대체한다."""
     path = DATA_DIR / "layouts" / f"layout_{layout}.json"
     if not path.exists():
         return DATA_DIR / "layouts" / "layout_65.json"
     return path
 
 
+def _selected_plate_or_400(plate_id: str) -> dict:
+    """plate id로 카탈로그 항목을 찾고 없으면 400 오류를 발생시킨다."""
+    plate = get_plate(plate_id)
+    if plate is None:
+        raise HTTPException(status_code=400, detail=f"Plate not found: {plate_id}")
+    return plate
+
+
 @app.get("/health")
 def health():
+    """서비스 상태와 마스킹된 설정 정보를 반환한다."""
     return {"status": "ok", "config": redacted_settings()}
 
 
 @app.get("/security/config")
 def security_config():
+    """프론트엔드 상태 표시용 마스킹 설정 정보를 반환한다."""
     return redacted_settings()
 
 
 @app.get("/assets/desk")
 def list_desk_assets():
+    """사용 가능한 데스크 액세서리 목록과 기본 선택값을 반환한다."""
     return {"assets": load_desk_assets(), "default_asset_ids": enabled_asset_ids()}
 
 
@@ -178,6 +202,7 @@ def list_model_library():
 
 @app.get("/layouts")
 def list_layouts():
+    """data/layouts 폴더의 대표 키보드 레이아웃 목록을 반환한다."""
     layouts = []
     for path in sorted((DATA_DIR / "layouts").glob("layout_*.json")):
         layout_id = path.stem.replace("layout_", "")
@@ -185,8 +210,36 @@ def list_layouts():
     return {"layouts": layouts}
 
 
+@app.get("/plates")
+def list_plates(query: str = "", brand: str = "", limit: int = 80):
+    """키보드 플레이트 카탈로그를 검색 조건에 맞게 반환한다."""
+    return {
+        "repo_path": str(keyboard_layout_repo_path()) if keyboard_layout_repo_path() else None,
+        "plates": search_plates(query=query, brand=brand, limit=limit),
+    }
+
+
+@app.get("/plates/brands")
+def plate_brands():
+    """플레이트 카탈로그에서 사용 가능한 브랜드 목록을 반환한다."""
+    return {
+        "repo_path": str(keyboard_layout_repo_path()) if keyboard_layout_repo_path() else None,
+        "brands": list_plate_brands(),
+    }
+
+
+@app.get("/plates/{plate_id}/preview")
+def plate_preview(plate_id: str):
+    """선택한 플레이트의 preview 이미지를 static 파일로 반환한다."""
+    preview_path = get_plate_preview_path(plate_id)
+    if preview_path is None or not preview_path.exists():
+        raise HTTPException(status_code=404, detail="Plate preview not found")
+    return FileResponse(preview_path)
+
+
 @app.get("/viewer", response_class=HTMLResponse)
 def model_viewer(model_url: str, camera: str = "perspective"):
+    """model-viewer 4.0을 사용해 GLB URL을 렌더링하는 HTML viewer를 반환한다."""
     camera_orbits = {
         "perspective": "32deg 58deg 165m",
         "top": "0deg 0deg 190m",
@@ -236,6 +289,7 @@ def model_viewer(model_url: str, camera: str = "perspective"):
 
 @app.post("/render/keyboard-preview")
 def render_keyboard_preview(request: KeyboardRenderRequest):
+    """키보드 단품 GLB를 생성하고 접근 가능한 model_url과 메타데이터를 반환한다."""
     model_name = f"keyboard_{request.layout}_{uuid4().hex[:8]}.glb"
     output_path = MODEL_DIR / model_name
 
@@ -268,6 +322,7 @@ def render_keyboard_preview(request: KeyboardRenderRequest):
 
 @app.post("/render/desk-setup")
 def render_desk_setup(request: DeskSetupRenderRequest):
+    """전체 데스크 셋업 GLB를 생성하고 접근 가능한 model_url과 메타데이터를 반환한다."""
     model_name = f"desk_setup_{request.layout}_{uuid4().hex[:8]}.glb"
     output_path = MODEL_DIR / model_name
 
@@ -306,6 +361,7 @@ def render_desk_setup(request: DeskSetupRenderRequest):
 
 @app.post("/render/uploaded-model")
 def render_uploaded_model(request: UploadedModelRequest):
+    """업로드된 모델 파일을 처리하고 변환 또는 프록시 GLB URL을 반환한다."""
     try:
         data = base64.b64decode(request.content_base64, validate=True)
         return handle_model_upload_bytes(
@@ -319,6 +375,27 @@ def render_uploaded_model(request: UploadedModelRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Upload failed: {exc}") from exc
+
+
+@app.post("/render/plate-drawing")
+def render_plate_drawing(request: PlateDrawingRenderRequest):
+    """선택한 플레이트 도면을 GLB로 변환하고 결과 URL을 반환한다."""
+    plate = _selected_plate_or_400(request.plate_id)
+    try:
+        result = convert_plate_drawing_to_glb(
+            plate=plate,
+            model_dir=MODEL_DIR,
+            public_base_url=_settings_base_url(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        **result,
+        "plate": plate,
+        "render_source": "drawing_converted_glb",
+        "viewer": "model-viewer@4.0.0",
+    }
 
 
 @app.post("/models/library/prepare")
@@ -361,6 +438,7 @@ def list_ai_providers():
 
 @app.post("/ai/copy")
 def generate_copy(request: AdContentRequest):
+    """광고 문구 생성 요청을 AI 계층으로 전달하고 결과를 반환한다."""
     return generate_ad_copy(request.model_dump())
 
 
@@ -440,6 +518,7 @@ def quality_summary():
 
 @app.post("/ai/poster")
 def generate_poster(request: AdContentRequest):
+    """광고 문구, 이미지 프롬프트, 포스터 SVG 생성을 묶어서 처리한다."""
     payload = request.model_dump()
     copy_result = generate_ad_copy(payload)
     image_prompt = build_image_prompt(payload, copy_result)
@@ -469,6 +548,7 @@ def generate_poster(request: AdContentRequest):
         "poster_file": poster_meta["poster_file"],
         "poster_template": payload.get("poster_template", "minimal_card"),
         "local_image_reference": safe_reference,
+        "image_reference": safe_reference,
         "image_job_id": request.image_job_id,
         "image_embedded": bool(image_b64),
     }

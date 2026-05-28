@@ -1,0 +1,32 @@
+{
+  "id": "keyboard_assembly_sample",
+  "description": "Renderer-facing keyboard assembly plan. DXF/DWG sources from keyboard_layout should be normalized into drawing specs before this object is rendered.",
+  "pipeline": [
+    "keyboard_layout DXF/DWG reference",
+    "DrawingSpec JSON",
+    "KeyboardAssemblySpec JSON",
+    "GLB scene"
+  ],
+  "parts": {
+    "case": {
+      "type": "procedural_case",
+      "material": "aluminum"
+    },
+    "pcb": {
+      "type": "procedural_pcb",
+      "source": "layout_json"
+    },
+    "plate": {
+      "type": "drawing_spec_plate",
+      "source": "data/drawings/keyboard_layout_plate_65.json"
+    },
+    "switches": {
+      "type": "cherry_mx_preview",
+      "source": "layout_json"
+    },
+    "keycaps": {
+      "type": "cherry_profile_preview",
+      "source": "layout_json"
+    }
+  }
+}

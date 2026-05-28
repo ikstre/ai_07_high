@@ -1,0 +1,28 @@
+{
+  "id": "keyboard_layout_plate_65",
+  "source_repo": "naraku010/keyboard_layout",
+  "source_url": "https://github.com/naraku010/keyboard_layout",
+  "source_type": "reference_json",
+  "drawing_type": "keyboard_plate",
+  "layout_family": "65",
+  "unit": "u",
+  "description": "65 percent plate spec used as a normalized stand-in for keyboard_layout DXF plate data.",
+  "dimensions": {
+    "width": 16,
+    "depth": 5,
+    "plate_thickness": 0.08,
+    "pcb_thickness": 0.08
+  },
+  "features": {
+    "switch_cutouts": 67,
+    "stabilizer_cutouts": 4,
+    "screw_holes": 8
+  },
+  "assembly_defaults": {
+    "plate_color": "#d9dde3",
+    "pcb_color": "#172554",
+    "gasket_color": "#9aa3af",
+    "case_bezel_extra": 0.0,
+    "mount_style": "tray_like_preview"
+  }
+}

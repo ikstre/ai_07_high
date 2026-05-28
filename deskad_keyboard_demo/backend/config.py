@@ -11,6 +11,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 def _load_env_file(path: Path) -> None:
+    """.env 파일이 있으면 KEY=VALUE 형식의 환경 변수를 현재 프로세스에 주입한다."""
     if not path.exists():
         return
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -28,6 +29,7 @@ _load_env_file(BASE_DIR.parent / ".env")
 
 
 def _int_env(name: str, default: int) -> int:
+    """환경 변수 값을 정수로 읽고 실패하면 기본값을 반환한다."""
     try:
         return int(os.getenv(name, str(default)))
     except ValueError:
@@ -43,6 +45,7 @@ def _bool_env(name: str, default: bool = False) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
+    """API, AI provider, 업로드, 변환기 관련 런타임 설정을 한 곳에 모은다."""
     api_base_url: str = os.getenv("DESKAD_API_BASE", "http://127.0.0.1:8000")
     public_api_base_url: str = os.getenv("DESKAD_PUBLIC_API_BASE", os.getenv("DESKAD_API_BASE", "http://127.0.0.1:8000"))
     ai_provider: str = os.getenv("AI_PROVIDER", "auto")
@@ -77,6 +80,8 @@ class Settings:
     shared_model_dir: str = os.getenv("DESKAD_SHARED_MODEL_DIR", "/opt/shared_model")
     step_converter_cmd: str = os.getenv("STEP_CONVERTER_CMD", "")
     step_converter_timeout_seconds: int = _int_env("STEP_CONVERTER_TIMEOUT_SECONDS", 120)
+    drawing_converter_cmd: str = os.getenv("DRAWING_CONVERTER_CMD", "")
+    drawing_converter_timeout_seconds: int = _int_env("DRAWING_CONVERTER_TIMEOUT_SECONDS", 120)
     cors_origins_raw: str = os.getenv("DESKAD_CORS_ORIGINS", "")
 
     @property
@@ -86,10 +91,17 @@ class Settings:
 
     @property
     def has_openai_key(self) -> bool:
+        """OpenAI 텍스트 API 키가 설정되어 있는지 반환한다."""
         return bool(self.openai_api_key)
 
     @property
+    def has_openai_image(self) -> bool:
+        """OpenAI 이미지 모델 호출에 필요한 키와 모델명이 모두 있는지 반환한다."""
+        return bool(self.openai_api_key and self.openai_image_model)
+
+    @property
     def has_local_llm(self) -> bool:
+        """로컬 LLM 엔드포인트가 설정되어 있는지 반환한다."""
         return bool(self.local_llm_base_url)
 
     @property
@@ -110,6 +122,7 @@ class Settings:
 
     @property
     def has_local_image(self) -> bool:
+        """로컬 이미지 생성 엔드포인트가 설정되어 있는지 반환한다."""
         return bool(self.local_image_endpoint)
 
     @property
@@ -119,11 +132,12 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    """프로세스 전체에서 재사용할 Settings 객체를 캐시해 반환한다."""
     return Settings()
 
 
 def redacted_settings() -> dict:
-    """Return Settings as a dict with secret fields masked.
+    """민감한 값은 마스킹하고 UI/API 상태 표시용 설정 요약을 반환한다.
 
     Secret detection delegates to backend.security so logs/responses/CLI dumps
     all share the same definition of "sensitive".
@@ -164,4 +178,5 @@ def redacted_settings() -> dict:
         "shared_data_dir": settings.shared_data_dir,
         "shared_model_dir": settings.shared_model_dir,
         "step_converter_cmd": "set" if settings.step_converter_cmd else "missing",
+        "drawing_converter_cmd": "set" if settings.drawing_converter_cmd else "missing",
     }
