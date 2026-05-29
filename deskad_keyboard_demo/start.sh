@@ -6,6 +6,10 @@ set -euo pipefail
 CONDA_ENV="sprint_high"
 BACKEND_PORT=8010
 FRONTEND_PORT=8501
+COMFYUI_PORT=8188
+OLLAMA_PORT=11434
+COMFYUI_SERVICE="${DESKAD_COMFYUI_SERVICE:-comfyui}"
+OLLAMA_SERVICE="${DESKAD_OLLAMA_SERVICE:-ollama}"
 # Bind Streamlit to loopback only. External access goes through nginx (8443) with basic auth.
 # To temporarily expose Streamlit directly for local debugging, set DESKAD_STREAMLIT_HOST=0.0.0.0.
 FRONTEND_HOST="${DESKAD_STREAMLIT_HOST:-127.0.0.1}"
@@ -16,6 +20,25 @@ log()  { echo "[deskad] $*"; }
 warn() { echo "[deskad][WARN] $*" >&2; }
 
 port_pid() { lsof -ti tcp:"$1" 2>/dev/null || true; }
+
+env_value() {
+  local key=$1 default=${2:-} value
+  value="${!key:-}"
+  if [[ -z "$value" && -f "$SCRIPT_DIR/.env" ]]; then
+    value=$(sed -nE "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*['\"]?([^'\"]*)['\"]?[[:space:]]*$/\1/p" "$SCRIPT_DIR/.env" | tail -n 1)
+  fi
+  printf '%s' "${value:-$default}"
+}
+
+service_active() {
+  local service=$1
+  command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$service" >/dev/null 2>&1
+}
+
+url_ready() {
+  local url=$1
+  curl -fsS --max-time 2 "$url" >/dev/null 2>&1
+}
 
 kill_port() {
   local port=$1 pid
@@ -88,6 +111,52 @@ preflight() {
     warn "conda 환경 '${CONDA_ENV}'이 없습니다."
     warn "의존성 설치: conda create -n ${CONDA_ENV} python=3.11 && conda run -n ${CONDA_ENV} pip install -r requirements.txt"
     exit 1
+  fi
+
+  check_model_workers
+}
+
+check_model_workers() {
+  local image_backend comfyui_base comfyui_workflow comfyui_stats
+  image_backend=$(env_value IMAGE_MODEL_BACKEND "auto")
+  comfyui_base=$(env_value COMFYUI_BASE_URL "")
+  comfyui_workflow=$(env_value COMFYUI_WORKFLOW_PATH "")
+
+  if [[ -n "$comfyui_base" || "$image_backend" == "comfyui" ]]; then
+    if [[ -n "$comfyui_workflow" && ! -f "$SCRIPT_DIR/$comfyui_workflow" && ! -f "$comfyui_workflow" ]]; then
+      warn "COMFYUI_WORKFLOW_PATH 파일을 찾을 수 없습니다: $comfyui_workflow"
+    fi
+
+    comfyui_stats="${comfyui_base%/}/system_stats"
+    if service_active "$COMFYUI_SERVICE"; then
+      log "ComfyUI systemd 서비스 active (${COMFYUI_SERVICE}.service)."
+    elif [[ -n "$comfyui_base" && "$comfyui_base" == http* ]] && url_ready "$comfyui_stats"; then
+      warn "ComfyUI endpoint는 응답하지만 ${COMFYUI_SERVICE}.service가 active가 아닙니다. 수동 실행 상태일 수 있습니다."
+    else
+      warn "ComfyUI worker가 준비되지 않았습니다. 이미지 생성은 fallback으로 동작하거나 실패할 수 있습니다."
+      warn "  서비스 등록: sudo install -m 0644 tools/systemd/comfyui.service /etc/systemd/system/comfyui.service && sudo systemctl daemon-reload && sudo systemctl enable --now ${COMFYUI_SERVICE}"
+      warn "  상태 확인: journalctl -u ${COMFYUI_SERVICE} -f"
+    fi
+  fi
+
+  local uses_ollama=false key base
+  for key in LOCAL_LLM_BASE_URL KANANA_BASE_URL MIDM_BASE_URL; do
+    base=$(env_value "$key" "")
+    if [[ "$base" == *":${OLLAMA_PORT}"* ]]; then
+      uses_ollama=true
+      break
+    fi
+  done
+
+  if [[ "$uses_ollama" == "true" ]]; then
+    if service_active "$OLLAMA_SERVICE"; then
+      log "Ollama systemd 서비스 active (${OLLAMA_SERVICE}.service)."
+    elif url_ready "http://127.0.0.1:${OLLAMA_PORT}/api/tags"; then
+      warn "Ollama endpoint는 응답하지만 ${OLLAMA_SERVICE}.service가 active가 아닙니다. 수동 실행 상태일 수 있습니다."
+    else
+      warn "Ollama가 준비되지 않았습니다. 로컬 한국어 LLM 슬롯은 fallback으로 동작할 수 있습니다."
+      warn "  상태 확인: systemctl status ${OLLAMA_SERVICE}"
+    fi
   fi
 }
 

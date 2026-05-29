@@ -25,7 +25,7 @@ def load_env_file(path: Path) -> None:
 
 
 load_env_file(APP_DIR / ".env")
-API_BASE = os.getenv("DESKAD_API_BASE", "http://127.0.0.1:8000").rstrip("/")
+API_BASE = os.getenv("DESKAD_API_BASE", "http://127.0.0.1:8010").rstrip("/")
 PUBLIC_API_BASE = os.getenv("DESKAD_PUBLIC_API_BASE", API_BASE).rstrip("/")
 
 

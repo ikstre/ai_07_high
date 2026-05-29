@@ -46,8 +46,8 @@ def _bool_env(name: str, default: bool = False) -> bool:
 @dataclass(frozen=True)
 class Settings:
     """API, AI provider, 업로드, 변환기 관련 런타임 설정을 한 곳에 모은다."""
-    api_base_url: str = os.getenv("DESKAD_API_BASE", "http://127.0.0.1:8000")
-    public_api_base_url: str = os.getenv("DESKAD_PUBLIC_API_BASE", os.getenv("DESKAD_API_BASE", "http://127.0.0.1:8000"))
+    api_base_url: str = os.getenv("DESKAD_API_BASE", "http://127.0.0.1:8010")
+    public_api_base_url: str = os.getenv("DESKAD_PUBLIC_API_BASE", os.getenv("DESKAD_API_BASE", "http://127.0.0.1:8010"))
     ai_provider: str = os.getenv("AI_PROVIDER", "auto")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")

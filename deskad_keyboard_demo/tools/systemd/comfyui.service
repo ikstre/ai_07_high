@@ -1,0 +1,30 @@
+[Unit]
+Description=ComfyUI image generation worker (FLUX.1 schnell)
+Documentation=https://github.com/comfyanonymous/ComfyUI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=leetaeho
+Group=leetaeho
+WorkingDirectory=/opt/shared_model/ComfyUI
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/opt/miniconda3/envs/sprint_high/bin:/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/miniconda3/envs/sprint_high/bin/python main.py --listen 127.0.0.1 --port 8188 --output-directory /opt/shared_model/ComfyUI/output
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Resource hygiene
+LimitNOFILE=65536
+
+# Loopback-only binding is enforced by --listen 127.0.0.1 above; keep this service
+# off public interfaces. If GPU sharing is needed later, switch to socket activation
+# rather than binding 0.0.0.0.
+
+[Install]
+WantedBy=multi-user.target

@@ -40,7 +40,24 @@ bash deskad_keyboard_demo/start.sh --restart   # 실행 중인 서버 재시작
 bash deskad_keyboard_demo/start.sh --stop      # 서버 종료
 ```
 
-### 3. 개별 실행
+### 3. 모델 워커(systemd, 선택)
+
+로컬 이미지 생성을 쓸 때는 ComfyUI를 systemd 서비스로 등록합니다. Ollama는 패키지 설치 시 생성되는 `ollama.service`를 사용하며, `start.sh`가 두 워커 상태를 점검합니다.
+
+```bash
+sudo install -m 0644 deskad_keyboard_demo/tools/systemd/comfyui.service /etc/systemd/system/comfyui.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now comfyui
+systemctl status comfyui --no-pager
+```
+
+로그 확인:
+
+```bash
+journalctl -u comfyui -f
+```
+
+### 4. 개별 실행
 
 **백엔드 (FastAPI, 포트 8010)**
 
@@ -54,18 +71,22 @@ conda run -n sprint_high python -m uvicorn backend.main:app --host 127.0.0.1 --p
 ```bash
 cd deskad_keyboard_demo
 conda run -n sprint_high python -m streamlit run streamlit_app.py \
-  --server.port 8501 --server.address 0.0.0.0 --server.headless true
+  --server.port 8501 --server.address 127.0.0.1 --server.headless true \
+  --server.enableCORS false --server.enableXsrfProtection true
 ```
 
-### 4. 접속
+### 5. 접속
 
 ```
-http://<VM_IP>:8501
+https://<VM_IP>:8443
 ```
 
 > **포트 안내**  
-> - `8501` — Streamlit 프론트엔드, 외부 공개  
-> - `8010` — FastAPI 백엔드, 내부 전용 (Streamlit이 base64 인라인으로 GLB/SVG를 전달하므로 외부 노출 불필요)  
+> - `8443` — nginx + basic auth 외부 접속  
+> - `8501` — Streamlit 프론트엔드, loopback 전용  
+> - `8010` — FastAPI 백엔드, loopback 전용  
+> - `8188` — ComfyUI 이미지 워커, loopback 전용  
+> - `11434` — Ollama 로컬 LLM, loopback 전용  
 > - `8000` — JupyterHub 전용, **절대 사용 금지**
 
 ---
