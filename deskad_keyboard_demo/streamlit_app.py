@@ -79,10 +79,89 @@ st.markdown(
       iframe {
         border-radius: 8px;
       }
+
+      .step-progress {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        margin: 4px 0 12px 0;
+        padding: 12px 16px;
+        background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 14px;
+      }
+      .step-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px 6px 6px;
+        border-radius: 999px;
+        font-size: 13px;
+        line-height: 1.1;
+        border: 1px solid transparent;
+        white-space: nowrap;
+      }
+      .step-chip .num {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        background: #ffffff;
+        border: 1px solid currentColor;
+      }
+      .step-chip.done {
+        color: #047857;
+        background: rgba(16, 185, 129, 0.10);
+        border-color: rgba(16, 185, 129, 0.32);
+      }
+      .step-chip.done .num {
+        background: #047857;
+        color: #ffffff;
+        border-color: #047857;
+      }
+      .step-chip.current {
+        color: #1d4ed8;
+        background: rgba(59, 130, 246, 0.12);
+        border-color: rgba(59, 130, 246, 0.42);
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+        font-weight: 600;
+      }
+      .step-chip.current .num {
+        background: #1d4ed8;
+        color: #ffffff;
+        border-color: #1d4ed8;
+      }
+      .step-chip.pending {
+        color: #64748b;
+        background: rgba(148, 163, 184, 0.10);
+        border-color: rgba(148, 163, 184, 0.28);
+      }
+      .step-connector {
+        flex: 1 1 24px;
+        height: 2px;
+        margin: 0 8px;
+        background: rgba(148, 163, 184, 0.28);
+        border-radius: 999px;
+      }
+      .step-connector.done {
+        background: rgba(16, 185, 129, 0.55);
+      }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+
+STEP_LABELS = {
+    1: "상품 정보",
+    2: "도면/제품 데이터",
+    3: "가상 셋업",
+    4: "광고 콘텐츠",
+}
 
 
 DEFAULTS = {
@@ -523,6 +602,34 @@ def go_next() -> None:
     st.session_state.step = min(4, st.session_state.step + 1)
 
 
+def render_step_progress() -> None:
+    current = int(st.session_state.get("step", 1))
+    total = len(STEP_LABELS)
+    chips: list[str] = []
+    for index, (step_id, label) in enumerate(STEP_LABELS.items()):
+        if step_id < current:
+            state = "done"
+        elif step_id == current:
+            state = "current"
+        else:
+            state = "pending"
+        chips.append(
+            f'<div class="step-chip {state}">'
+            f'<span class="num">{step_id}</span>'
+            f'<span class="label">{label}</span>'
+            f'</div>'
+        )
+        if index < total - 1:
+            connector_state = "done" if step_id < current else "pending"
+            chips.append(f'<div class="step-connector {connector_state}"></div>')
+
+    st.markdown(
+        '<div class="step-progress">' + "".join(chips) + "</div>",
+        unsafe_allow_html=True,
+    )
+    st.progress(current / total, text=f"{current} / {total} — {STEP_LABELS[current]}")
+
+
 with st.sidebar:
     st.markdown("## DeskAd AI")
     st.caption("도면 기반 3D 셋업 + 광고 콘텐츠 생성")
@@ -530,16 +637,10 @@ with st.sidebar:
     st.divider()
 
     st.markdown("### 작업 단계")
-    step_labels = {
-        1: "상품 정보",
-        2: "도면/제품 데이터",
-        3: "가상 셋업",
-        4: "광고 콘텐츠",
-    }
     st.session_state.step = st.radio(
         "현재 단계",
-        options=list(step_labels.keys()),
-        format_func=lambda value: f"{value}. {step_labels[value]}",
+        options=list(STEP_LABELS.keys()),
+        format_func=lambda value: f"{value}. {STEP_LABELS[value]}",
         label_visibility="collapsed",
         key="step_selector",
         on_change=sync_step_from_sidebar,
@@ -571,6 +672,8 @@ with st.sidebar:
         st.checkbox("광고 문구", value=True)
         st.checkbox("PPT 자료", value=False)
 
+
+render_step_progress()
 
 left_col, result_col = st.columns([0.62, 1.35], gap="large")
 
