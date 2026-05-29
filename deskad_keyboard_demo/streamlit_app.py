@@ -150,6 +150,39 @@ st.markdown(
       .step-connector.done {
         background: rgba(16, 185, 129, 0.55);
       }
+
+      .poster-thumb-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .poster-thumb {
+        border: 1px solid rgba(148, 163, 184, 0.32);
+        border-radius: 10px;
+        padding: 6px 8px 4px 8px;
+        background: #ffffff;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .poster-thumb.active {
+        border-color: #1d4ed8;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.22);
+      }
+      .poster-thumb .ptitle {
+        font-size: 11px;
+        font-weight: 600;
+        color: #334155;
+        margin-bottom: 2px;
+        letter-spacing: -0.1px;
+      }
+      .poster-thumb.active .ptitle {
+        color: #1d4ed8;
+      }
+      .poster-thumb svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -284,6 +317,77 @@ POSTER_TEMPLATE_LABELS = {
     "feature_focus": "Feature Focus (스펙 강조)",
     "promo_banner": "Promo Banner (할인/광고)",
 }
+
+# 각 템플릿의 실제 backend SVG 레이아웃을 단순화한 140x100 미리보기 (선택 전 비교용).
+# backend/ai.py 의 _{template}_svg 함수와 시각적으로 일관되게 유지한다.
+POSTER_TEMPLATE_THUMBNAILS = {
+    "minimal_card": (
+        '<svg viewBox="0 0 140 100" xmlns="http://www.w3.org/2000/svg">'
+        '<rect width="140" height="100" rx="6" fill="#f8fafc"/>'
+        '<rect x="11" y="10" width="60" height="6" rx="2" fill="#1e293b"/>'
+        '<rect x="11" y="20" width="44" height="4" rx="2" fill="#64748b"/>'
+        '<rect x="18" y="32" width="104" height="38" rx="4" fill="#cbd5e1"/>'
+        '<rect x="11" y="76" width="46" height="5" rx="2" fill="#1e293b"/>'
+        '<rect x="11" y="84" width="32" height="4" rx="2" fill="#64748b"/>'
+        '<rect x="11" y="91" width="36" height="6" rx="3" fill="#3b82f6"/>'
+        '</svg>'
+    ),
+    "grid_three": (
+        '<svg viewBox="0 0 140 100" xmlns="http://www.w3.org/2000/svg">'
+        '<rect width="140" height="100" rx="6" fill="#f8fafc"/>'
+        '<rect x="11" y="8" width="76" height="6" rx="2" fill="#1e293b"/>'
+        '<rect x="11" y="20" width="72" height="48" rx="4" fill="#cbd5e1"/>'
+        '<rect x="88" y="20" width="40" height="22" rx="4" fill="#3b82f6" opacity="0.55"/>'
+        '<rect x="88" y="46" width="40" height="22" rx="4" fill="#a78bfa" opacity="0.75"/>'
+        '<rect x="11" y="74" width="54" height="5" rx="2" fill="#1e293b"/>'
+        '<rect x="11" y="83" width="80" height="4" rx="2" fill="#64748b"/>'
+        '<rect x="11" y="91" width="60" height="4" rx="2" fill="#3b82f6"/>'
+        '</svg>'
+    ),
+    "feature_focus": (
+        '<svg viewBox="0 0 140 100" xmlns="http://www.w3.org/2000/svg">'
+        '<rect width="140" height="100" rx="6" fill="#f8fafc"/>'
+        '<rect x="11" y="10" width="64" height="6" rx="2" fill="#1e293b"/>'
+        '<rect x="11" y="24" width="62" height="56" rx="4" fill="#cbd5e1"/>'
+        '<rect x="80" y="22" width="50" height="60" rx="6" fill="#3b82f6" opacity="0.10"/>'
+        '<text x="85" y="31" font-size="6" font-family="sans-serif" font-weight="700" fill="#1d4ed8">SPECS</text>'
+        '<circle cx="86" cy="42" r="1.6" fill="#1d4ed8"/><rect x="90" y="40" width="36" height="3" rx="1" fill="#334155"/>'
+        '<circle cx="86" cy="52" r="1.6" fill="#1d4ed8"/><rect x="90" y="50" width="32" height="3" rx="1" fill="#334155"/>'
+        '<circle cx="86" cy="62" r="1.6" fill="#1d4ed8"/><rect x="90" y="60" width="34" height="3" rx="1" fill="#334155"/>'
+        '<circle cx="86" cy="72" r="1.6" fill="#1d4ed8"/><rect x="90" y="70" width="28" height="3" rx="1" fill="#334155"/>'
+        '<rect x="11" y="89" width="40" height="5" rx="2" fill="#1e293b"/>'
+        '</svg>'
+    ),
+    "promo_banner": (
+        '<svg viewBox="0 0 140 100" xmlns="http://www.w3.org/2000/svg">'
+        '<rect width="140" height="100" rx="6" fill="#f8fafc"/>'
+        '<rect x="6" y="14" width="128" height="60" rx="6" fill="#f59e0b"/>'
+        '<text x="14" y="38" font-size="14" font-family="sans-serif" font-weight="800" fill="#ffffff">50% OFF</text>'
+        '<text x="14" y="56" font-size="9" font-family="sans-serif" font-weight="700" fill="#fff7ed">한정 특가</text>'
+        '<rect x="84" y="22" width="44" height="36" rx="4" fill="#ffffff" opacity="0.55"/>'
+        '<rect x="14" y="80" width="60" height="4" rx="2" fill="#1e293b"/>'
+        '<rect x="14" y="88" width="84" height="4" rx="2" fill="#64748b"/>'
+        '<rect x="14" y="94" width="40" height="3" rx="1" fill="#3b82f6"/>'
+        '</svg>'
+    ),
+}
+
+
+def render_poster_template_thumbnails(current_key: str) -> None:
+    cards: list[str] = []
+    for key, label in POSTER_TEMPLATE_LABELS.items():
+        thumb = POSTER_TEMPLATE_THUMBNAILS.get(key, "")
+        state = "active" if key == current_key else ""
+        cards.append(
+            f'<div class="poster-thumb {state}">'
+            f'<div class="ptitle">{label}</div>'
+            f'{thumb}'
+            f'</div>'
+        )
+    st.markdown(
+        '<div class="poster-thumb-grid">' + "".join(cards) + '</div>',
+        unsafe_allow_html=True,
+    )
 
 MONITOR_SIZES = {
     "24": "24인치 (56 × 33 cm)",
@@ -939,6 +1043,7 @@ with left_col:
                     index=list(POSTER_TEMPLATE_LABELS.keys()).index(st.session_state.poster_template),
                     format_func=lambda k: POSTER_TEMPLATE_LABELS[k],
                 )
+                render_poster_template_thumbnails(st.session_state.poster_template)
                 config_now = fetch_security_config()
                 local_llm_status = "on" if config_now.get("local_llm_base_url") == "set" else "off"
                 hyperclova_status = "on" if config_now.get("hyperclova_base_url") == "set" else "off"
