@@ -399,7 +399,11 @@ KEYBOARD_SIZE_INFO = {
     "60": "60% (약 28.6 × 9.5 cm, 61키)",
     "65": "65% (약 30.5 × 9.5 cm, 67키)",
     "75": "75% (약 30.5 × 11.4 cm, 84키)",
+    "87": "TKL 80% (약 34.8 × 11.4 cm, 87키)",
+    "104": "풀배열 100% (약 42.9 × 11.4 cm, 104키)",
 }
+
+DEFAULT_LAYOUT_FALLBACK = ["60", "65", "75", "87", "104"]
 
 for key, value in DEFAULTS.items():
     st.session_state.setdefault(key, value.copy() if isinstance(value, list) else value)
@@ -428,6 +432,22 @@ KEYBOARD_MODEL_DEFAULTS = {
     "HHKB Style 60": {
         "layout": "60",
         "description": "60% 배열, 화살표 클러스터 없는 클래식 미니멀 키보드",
+    },
+    "Keychron Q3 TKL": {
+        "layout": "87",
+        "description": "87키 텐키리스 알루미늄 키보드, 게이밍/사무용 만능 셋업",
+    },
+    "Leopold FC750R": {
+        "layout": "87",
+        "description": "TKL 80% 클래식, PBT 키캡 + 무각 디자인의 사무용 표준",
+    },
+    "Keychron Q6 Full": {
+        "layout": "104",
+        "description": "풀배열 100% 알루미늄 케이스, 텐키 필요한 회계/데이터 업무용",
+    },
+    "Royal Kludge RK104": {
+        "layout": "104",
+        "description": "풀배열 무선 키보드, 책상이 넓은 스튜디오/홈오피스 셋업",
     },
 }
 
@@ -523,6 +543,17 @@ def fetch_desk_assets() -> list[dict]:
         return api_get("/assets/desk")["assets"]
     except Exception:
         return FALLBACK_ASSETS
+
+
+@st.cache_data(ttl=60)
+def fetch_layout_ids() -> list[str]:
+    try:
+        payload = api_get("/layouts")
+        layouts = payload.get("layouts") or []
+        ids = [item["id"] for item in layouts if isinstance(item, dict) and item.get("id")]
+        return ids or list(DEFAULT_LAYOUT_FALLBACK)
+    except Exception:
+        return list(DEFAULT_LAYOUT_FALLBACK)
 
 
 @st.cache_data(ttl=30)
@@ -815,11 +846,11 @@ with left_col:
                 key="keyboard_model",
                 on_change=sync_layout_from_model,
             )
-            layout_options = ["60", "65", "75"]
+            layout_options = fetch_layout_ids()
             st.session_state.layout = st.selectbox(
                 "배열",
                 layout_options,
-                index=layout_options.index(st.session_state.layout) if st.session_state.layout in layout_options else 1,
+                index=layout_options.index(st.session_state.layout) if st.session_state.layout in layout_options else min(1, len(layout_options) - 1),
                 format_func=lambda k: KEYBOARD_SIZE_INFO.get(k, k + "%"),
             )
             st.session_state.drawing_upload_mode = st.radio(

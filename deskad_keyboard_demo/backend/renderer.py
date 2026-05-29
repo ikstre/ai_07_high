@@ -698,13 +698,15 @@ def _add_keyboard_detailed(
     case_margin_cm = 1.6
     case_outer_w = board_width_cm + case_margin_cm * 2
     case_outer_d = board_depth_cm + case_margin_cm * 2
-    case_outer_h = 2.4
-    case_bottom_h = 1.1
+    # 실측 커스텀 키보드 측면 실루엣과 맞추기 위해 case/스위치 두께를 슬림화한다.
+    # 이전 값(case 2.4 + housing 1.20)은 측면에서 case·switch·keycap이 분리된 층처럼 보이는 회귀를 유발했음.
+    case_outer_h = 2.1
+    case_bottom_h = 0.95
     plate_h = 0.20
     pcb_h = 0.16
     profile = KEYCAP_PROFILE_PRESETS.get(keycap_profile, KEYCAP_PROFILE_PRESETS["cherry"])
     switch_family_params = SWITCH_FAMILY_PRESETS.get(switch_family, SWITCH_FAMILY_PRESETS["mx"])
-    switch_housing_h = 1.12 if switch_family == "topre" else 1.20
+    switch_housing_h = 0.58 if switch_family == "topre" else 0.65
     key_height_cm = float(profile["height"])
     key_gap_cm = float(profile["gap"])
     key_top_inset_cm = float(profile["top_inset"])
@@ -861,7 +863,11 @@ def _add_keyboard_detailed(
                 taper=0.06,
             )
 
-    plate_y: float | None = None
+    # plate는 case 내부 상단 가까이에 위치시켜 측면에서 자연스러운 실루엣을 만든다.
+    # switch housing 은 plate 위에 얹혀 case 상단을 약간 뚫고 나오는 형태가 되어야
+    # case·plate·switch가 하나의 통일된 키보드처럼 보인다.
+    plate_y = SURFACE_Y + case_outer_h - 0.20 - plate_h / 2
+
     if not show_internals:
         builder.add_box(
             "plate rim visible between keycaps",
@@ -888,7 +894,6 @@ def _add_keyboard_detailed(
                 pcb_trace_mat,
             )
 
-        plate_y = pcb_y + pcb_h / 2 + plate_h / 2 + 0.18
         builder.add_box(
             "plate",
             (center_x, plate_y, center_z),
@@ -897,7 +902,7 @@ def _add_keyboard_detailed(
             taper=0.04,
         )
 
-    switch_base_y = SURFACE_Y + case_outer_h - 0.05
+    switch_base_y = plate_y + plate_h / 2
     stem_y = switch_base_y + switch_housing_h
     accent_idx = accent_keys if accent_keys is not None else {0, 13, 14, 42, 56, 65, 66}
 
@@ -1163,10 +1168,58 @@ def _add_monitor_arm(
         segments=18,
     )
     if style == "double_joint":
+        # 가시적인 elbow 가 측면에서 보이도록 upper/lower boom 의 Y 높이를 분리하고,
+        # 그 사이에 수직 elbow drop + 상하 accent 조인트를 두 개 둔다.
         midpoint_z = (clamp_z + screen_back_z) / 2
-        builder.add_box("arm upper boom", (center_x, SURFACE_Y + 32.0, (clamp_z + midpoint_z) / 2), (2.6, 2.0, abs(midpoint_z - clamp_z)), body_mat, taper=0.08)
-        builder.add_cylinder_y("arm elbow joint", (center_x, SURFACE_Y + 32.0, midpoint_z), 1.5, 2.2, accent_mat, segments=18)
-        builder.add_box("arm lower boom", (center_x, SURFACE_Y + 31.0, (midpoint_z + screen_back_z) / 2), (2.6, 2.0, abs(midpoint_z - screen_back_z)), body_mat, taper=0.08)
+        upper_y = SURFACE_Y + 33.0
+        lower_y = SURFACE_Y + 28.5
+        vesa_y = SURFACE_Y + 31.0
+        builder.add_box(
+            "arm upper boom",
+            (center_x, upper_y, (clamp_z + midpoint_z) / 2),
+            (2.6, 2.0, abs(midpoint_z - clamp_z) + 0.6),
+            body_mat,
+            taper=0.08,
+        )
+        builder.add_cylinder_y(
+            "arm elbow upper joint",
+            (center_x, upper_y - 0.1, midpoint_z),
+            1.7,
+            1.4,
+            accent_mat,
+            segments=18,
+        )
+        builder.add_cylinder_y(
+            "arm elbow drop",
+            (center_x, (upper_y + lower_y) / 2, midpoint_z),
+            1.0,
+            upper_y - lower_y,
+            body_mat,
+            segments=14,
+        )
+        builder.add_cylinder_y(
+            "arm elbow lower joint",
+            (center_x, lower_y + 0.1, midpoint_z),
+            1.7,
+            1.4,
+            accent_mat,
+            segments=18,
+        )
+        builder.add_box(
+            "arm lower boom",
+            (center_x, lower_y, (midpoint_z + screen_back_z) / 2),
+            (2.6, 2.0, abs(screen_back_z - midpoint_z) + 0.6),
+            body_mat,
+            taper=0.08,
+        )
+        builder.add_cylinder_y(
+            "arm vesa bracket",
+            (center_x, (lower_y + vesa_y) / 2, screen_back_z),
+            1.1,
+            abs(vesa_y - lower_y) + 0.6,
+            body_mat,
+            segments=14,
+        )
     else:
         builder.add_box("monitor arm boom", (center_x, SURFACE_Y + 31.0, (clamp_z + screen_back_z) / 2), (2.6, 2.0, abs(screen_back_z - clamp_z)), body_mat, taper=0.08)
     builder.add_box("vesa plate 100x100", (center_x, SURFACE_Y + 31.0, screen_back_z), (10.0, 10.0, 0.8), body_mat, taper=0.08)
