@@ -9,7 +9,7 @@ import re
 import textwrap
 import time
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from uuid import uuid4
 
 import requests
@@ -58,7 +58,12 @@ _PROMPT_INJECTION_HINTS = re.compile(
     r"|reveal (the )?(system|api)"
     r"|act as (a )?(developer|admin|system)"
     r"|jailbreak"
-    r"|disregard (the )?rules)",
+    r"|disregard (the )?rules"
+    r"|이전\s*(지시|명령|내용).*무시"
+    r"|시스템\s*(프롬프트|지침).*보여"
+    r"|개발자\s*모드"
+    r"|관리자\s*(권한|모드|야)"
+    r"|이\s*절부터)",
     re.IGNORECASE,
 )
 
@@ -287,6 +292,24 @@ def _copy_adapter(name: str) -> ChatCompletionAdapter | HyperClovaDirectAdapter:
     )
 
 
+def _host_port(url: str) -> tuple[str, int] | None:
+    parsed = urlparse(url or "")
+    if not parsed.hostname:
+        return None
+    host = parsed.hostname.lower()
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        host = "loopback"
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return host, port
+
+
+def _uses_managed_text_worker(adapter: ChatCompletionAdapter | HyperClovaDirectAdapter) -> bool:
+    worker_endpoint = os.getenv("TEXT_WORKER_HEALTH_URL", "http://127.0.0.1:11501/health")
+    return _host_port(adapter.base_url) == _host_port(worker_endpoint)
+
+
 def _provider_order(provider: str) -> list[str]:
     provider = _normalize_text_provider(provider)
     if provider == "auto":
@@ -370,7 +393,7 @@ def generate_ad_copy(payload: dict, provider_override: str | None = None, *, for
             if cached is not None:
                 return apply_copy_policy(payload, cached)
 
-        ensure_text_worker()
+        ensure_text_worker(start_managed_worker=_uses_managed_text_worker(adapter))
         try:
             result = apply_copy_policy(payload, _chat_copy(payload, adapter))
             cache_key = make_text_cache_key(payload, provider_name, adapter.model or adapter.default_model)
@@ -453,7 +476,7 @@ def generate_copy_experiment(payload: dict, providers: list[str] | None = None, 
                 results.append({"provider": provider_id, "status": "ok", "copy": apply_copy_policy(payload, cached), "cache_hit": True})
                 continue
 
-        ensure_text_worker()
+        ensure_text_worker(start_managed_worker=_uses_managed_text_worker(adapter))
         try:
             result = apply_copy_policy(payload, _chat_copy(payload, adapter))
             cache_key = make_text_cache_key(payload, provider_id, adapter.model or adapter.default_model)
@@ -982,6 +1005,7 @@ def _image_jobs_path() -> Path:
 
 
 IMAGE_JOB_STORE = ImageJobStore(_image_jobs_path())
+COMFYUI_TERMINAL_STATUSES = {"completed", "failed", "draft", "not_configured"}
 
 
 def safe_image_reference(image_reference: dict | None) -> dict | None:
@@ -1075,6 +1099,61 @@ def _comfyui_image_url(base_url: str, image: dict) -> str:
     return f"{base_url.rstrip('/')}/view?{query}"
 
 
+def _download_comfyui_image_reference(job_id: str, image_url: str) -> dict:
+    try:
+        response = requests.get(image_url, timeout=30)
+        response.raise_for_status()
+    except Exception as exc:
+        return {
+            "provider": "comfyui",
+            "job_id": job_id,
+            "has_image": False,
+            "source_url": image_url,
+            "error": str(exc),
+        }
+    return {
+        "provider": "comfyui",
+        "job_id": job_id,
+        "has_image": True,
+        "image_b64": base64.b64encode(response.content).decode("ascii"),
+        "source_url": image_url,
+    }
+
+
+def _has_active_comfyui_jobs(exclude_job_id: str | None = None) -> bool:
+    for record in IMAGE_JOB_STORE.all().values():
+        if exclude_job_id and record.get("job_id") == exclude_job_id:
+            continue
+        if record.get("provider") == "comfyui" and record.get("status") not in COMFYUI_TERMINAL_STATUSES:
+            return True
+    return False
+
+
+def _maybe_release_comfyui_worker(job: dict) -> None:
+    if job.get("provider") != "comfyui" or job.get("status") not in COMFYUI_TERMINAL_STATUSES:
+        return
+    if _has_active_comfyui_jobs(job.get("job_id")):
+        return
+    try:
+        from .runtime_workers import release_image_worker_after_job
+
+        release_image_worker_after_job(f"ComfyUI job {job.get('job_id')} {job.get('status')}")
+    except Exception:
+        pass
+
+
+def _cache_completed_image_job(job: dict) -> None:
+    cache_key = job.get("cache_key")
+    if job.get("status") != "completed" or not isinstance(cache_key, str) or not cache_key:
+        return
+    try:
+        from .result_cache import put_image_cache
+
+        put_image_cache(cache_key, public_image_job(job))
+    except Exception:
+        pass
+
+
 def _submit_comfyui_job(job: dict, payload: dict, image_prompt: str) -> dict:
     settings = get_settings()
     workflow = _load_comfyui_workflow(payload, image_prompt)
@@ -1113,7 +1192,10 @@ def poll_image_job(job_id: str) -> dict | None:
     if not job:
         return None
     settings = get_settings()
-    if job.get("provider") != "comfyui" or job.get("status") in {"completed", "failed", "draft", "not_configured"}:
+    if job.get("provider") != "comfyui":
+        return public_image_job(job)
+    if job.get("status") in COMFYUI_TERMINAL_STATUSES:
+        _maybe_release_comfyui_worker(job)
         return public_image_job(job)
     prompt_id = job.get("comfyui_prompt_id")
     if not prompt_id:
@@ -1133,8 +1215,9 @@ def poll_image_job(job_id: str) -> dict | None:
         status_info = record.get("status", {}) if isinstance(record, dict) else {}
         if status_info.get("status_str") == "error":
             job.update({"status": "failed", "error": status_info.get("messages", "ComfyUI workflow failed")})
-            IMAGE_JOB_STORE.save(job)
-            return public_image_job(job)
+            saved_job = IMAGE_JOB_STORE.save(job)
+            _maybe_release_comfyui_worker(saved_job)
+            return public_image_job(saved_job)
         images = []
         for output in (record.get("outputs", {}) or {}).values():
             for image in output.get("images", []) if isinstance(output, dict) else []:
@@ -1143,12 +1226,16 @@ def poll_image_job(job_id: str) -> dict | None:
                 images.append(image_record)
         if images:
             job.update({"status": "completed", "images": images, "completed_at": int(time.time())})
+            if images[0].get("url"):
+                job["local_image_reference"] = _download_comfyui_image_reference(job_id, images[0]["url"])
         else:
             job["status"] = "running"
     except Exception as exc:
         job.update({"status": "failed", "error": str(exc)})
-    IMAGE_JOB_STORE.save(job)
-    return public_image_job(job)
+    saved_job = IMAGE_JOB_STORE.save(job)
+    _cache_completed_image_job(saved_job)
+    _maybe_release_comfyui_worker(saved_job)
+    return public_image_job(saved_job)
 
 
 def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = False) -> dict:
@@ -1161,12 +1248,13 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
     cache_key = make_image_cache_key(image_prompt, payload, width, height, settings.comfyui_workflow_path)
     if not force_regen:
         cached_job = get_image_cache(cache_key)
-        if cached_job is not None:
+        if cached_job is not None and cached_job.get("status") == "completed":
             return cached_job
 
     job_id = uuid4().hex
     job: dict = {
         "job_id": job_id,
+        "cache_key": cache_key,
         "status": "created",
         "provider": "fallback",
         "created_at": int(time.time()),
@@ -1208,9 +1296,10 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
             }
         )
 
-    IMAGE_JOB_STORE.save(job)
-    result = public_image_job(job)
-    if job.get("status") not in {"not_configured", "failed"}:
+    saved_job = IMAGE_JOB_STORE.save(job)
+    _maybe_release_comfyui_worker(saved_job)
+    result = public_image_job(saved_job)
+    if saved_job.get("status") == "completed":
         put_image_cache(cache_key, result)
     schedule_idle_reap()
     return result
@@ -1228,7 +1317,7 @@ def image_reference_from_job(job_id: str) -> dict | None:
     if not job:
         return {"provider": "image_job", "error": "Image job not found."}
 
-    if job.get("provider") == "comfyui" and job.get("status") not in {"completed", "failed", "draft", "not_configured"}:
+    if job.get("provider") == "comfyui" and job.get("status") not in COMFYUI_TERMINAL_STATUSES:
         poll_image_job(job_id)
         job = IMAGE_JOB_STORE.get(job_id) or job
 

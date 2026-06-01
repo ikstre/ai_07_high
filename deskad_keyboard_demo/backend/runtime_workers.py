@@ -43,6 +43,13 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def gpu_worker_mode() -> str:
     return _env("GPU_WORKER_MODE", "always_on").lower()
 
@@ -76,6 +83,10 @@ def _image_service() -> str:
 
 def _image_health_url() -> str:
     return _env("IMAGE_WORKER_HEALTH_URL", "http://127.0.0.1:8188/system_stats")
+
+
+def image_worker_stop_after_job() -> bool:
+    return _bool_env("IMAGE_WORKER_STOP_AFTER_JOB", True)
 
 
 # ── persistent state ──────────────────────────────────────────────────────────
@@ -256,12 +267,13 @@ def _stop_image_worker_locked() -> None:
 
 # ── public API ────────────────────────────────────────────────────────────────
 
-def ensure_text_worker() -> bool:
+def ensure_text_worker(start_managed_worker: bool = True) -> bool:
     """Ensure the text worker is running (respects GPU_WORKER_MODE).
 
     In always_on mode, just updates the last-used timestamp and returns True.
     In on_demand/exclusive mode, acquires the global file lock, stops the
-    competing worker if exclusive, then starts the text worker if needed.
+    competing worker if exclusive, then starts the managed text worker only
+    when the selected provider actually needs TEXT_WORKER_CMD.
     Returns True if the worker is (or should be) up.
     """
     mode = gpu_worker_mode()
@@ -273,6 +285,11 @@ def ensure_text_worker() -> bool:
         if mode == "exclusive" and is_image_worker_up():
             logger.info("[exclusive] Stopping image worker before starting text worker")
             _stop_image_worker_locked()
+        if not start_managed_worker:
+            if is_text_worker_up():
+                logger.info("Stopping managed text worker; selected provider does not use TEXT_WORKER_CMD")
+                _stop_text_worker_locked()
+            return True
         ok = _start_text_worker_locked()
         if ok:
             _touch_last_used("text")
@@ -300,6 +317,27 @@ def ensure_image_worker() -> bool:
         if ok:
             _touch_last_used("image")
         return ok
+
+
+def release_image_worker_after_job(reason: str = "terminal image job") -> bool:
+    """Stop the managed image worker immediately after the last image job.
+
+    always_on keeps the historical externally managed behavior. on_demand and
+    exclusive can opt out with IMAGE_WORKER_STOP_AFTER_JOB=false.
+    """
+    mode = gpu_worker_mode()
+    if mode == "always_on" or not image_worker_stop_after_job():
+        return False
+
+    with _WorkerLock():
+        if not is_image_worker_up():
+            return False
+        logger.info("Stopping image worker after %s", reason)
+        _stop_image_worker_locked()
+        state = _load_state()
+        state["image_last_used"] = 0
+        _save_state(state)
+        return True
 
 
 def reap_idle_workers() -> None:

@@ -20,7 +20,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 DEFAULT_MODEL = "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B"
-MODEL_ID = os.getenv("HYPERCLOVA_SEED_MODEL", DEFAULT_MODEL)
+MODEL_ID = os.getenv("HYPERCLOVA_SEED_MODEL") or os.getenv("HYPERCLOVA_MODEL") or DEFAULT_MODEL
 HOST = os.getenv("HYPERCLOVA_SEED_HOST", "127.0.0.1")
 PORT = int(os.getenv("HYPERCLOVA_SEED_PORT", "11501"))
 MAX_NEW_TOKENS = int(os.getenv("HYPERCLOVA_SEED_MAX_NEW_TOKENS", "512"))
