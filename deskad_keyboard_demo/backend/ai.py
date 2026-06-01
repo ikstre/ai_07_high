@@ -17,7 +17,7 @@ import requests
 from .config import get_settings
 from .copy_policy import apply_copy_policy
 from .job_store import ImageJobStore
-from .llm_adapters import ChatCompletionAdapter, HyperClovaDirectAdapter
+from .llm_adapters import ChatCompletionAdapter, HyperClovaDirectAdapter, is_loopback_base_url
 
 
 STYLE_COPY = {
@@ -249,15 +249,15 @@ def _copy_adapter(name: str) -> ChatCompletionAdapter | HyperClovaDirectAdapter:
                 model=settings.hyperclova_model,
                 api_key=settings.hyperclova_api_key,
                 apigw_key=settings.hyperclova_apigw_key,
-                default_model="HCX-003",
+                default_model="HCX-005",
             )
         return ChatCompletionAdapter(
             name="hyperclova_x",
             base_url=settings.hyperclova_base_url,
             model=settings.hyperclova_model,
             api_key=settings.hyperclova_api_key,
-            default_model="hyperclova-x",
-            require_api_key=True,
+            default_model="HCX-005",
+            require_api_key=not is_loopback_base_url(settings.hyperclova_base_url),
             json_response_format=False,
         )
     if name == "kanana":
@@ -344,7 +344,10 @@ def _chat_copy(payload: dict, adapter: ChatCompletionAdapter | HyperClovaDirectA
     return _merge_structured_response(base, parsed)
 
 
-def generate_ad_copy(payload: dict, provider_override: str | None = None) -> dict:
+def generate_ad_copy(payload: dict, provider_override: str | None = None, *, force_regen: bool = False) -> dict:
+    from .result_cache import get_text_cache, make_text_cache_key, put_text_cache
+    from .runtime_workers import ensure_text_worker, schedule_idle_reap
+
     settings = get_settings()
     provider = _normalize_text_provider(provider_override or settings.ai_provider)
     errors: list[str] = []
@@ -358,8 +361,20 @@ def generate_ad_copy(payload: dict, provider_override: str | None = None) -> dic
             if provider != "auto":
                 errors.append(f"{adapter.name}: not configured")
             continue
+
+        if not force_regen:
+            cache_key = make_text_cache_key(payload, provider_name, adapter.model or adapter.default_model)
+            cached = get_text_cache(cache_key)
+            if cached is not None:
+                return apply_copy_policy(payload, cached)
+
+        ensure_text_worker()
         try:
-            return apply_copy_policy(payload, _chat_copy(payload, adapter))
+            result = apply_copy_policy(payload, _chat_copy(payload, adapter))
+            cache_key = make_text_cache_key(payload, provider_name, adapter.model or adapter.default_model)
+            put_text_cache(cache_key, result)
+            schedule_idle_reap()
+            return result
         except Exception as exc:
             errors.append(f"{adapter.name}: {exc}")
             if provider != "auto":
@@ -369,7 +384,45 @@ def generate_ad_copy(payload: dict, provider_override: str | None = None) -> dic
     return apply_copy_policy(payload, _fallback_copy(payload, error=error_text))
 
 
-def generate_copy_experiment(payload: dict, providers: list[str] | None = None) -> dict:
+def normalize_selected_copy(payload: dict) -> dict | None:
+    raw = payload.get("selected_copy")
+    if not isinstance(raw, dict):
+        return None
+
+    selected = {
+        "provider": sanitize_user_text(raw.get("provider") or "selected", limit=60),
+        "headline": sanitize_user_text(raw.get("headline"), limit=80),
+        "subcopy": sanitize_user_text(raw.get("subcopy"), limit=160),
+        "cta": sanitize_user_text(raw.get("cta"), limit=40),
+        "copies": [
+            sanitize_user_text(copy, limit=160)
+            for copy in (raw.get("copies") or [])[:5]
+            if sanitize_user_text(copy, limit=160)
+        ],
+        "hashtags": [
+            "#" + sanitize_user_text(tag, limit=40).lstrip("#")
+            for tag in (raw.get("hashtags") or [])[:6]
+            if sanitize_user_text(tag, limit=40)
+        ],
+        "spec_bullets": [
+            sanitize_user_text(item, limit=120)
+            for item in (raw.get("spec_bullets") or [])[:5]
+            if sanitize_user_text(item, limit=120)
+        ],
+    }
+    if not selected["headline"] and not selected["copies"]:
+        return None
+    return apply_copy_policy(payload, selected)
+
+
+def selected_copy_or_generate(payload: dict) -> dict:
+    return normalize_selected_copy(payload) or generate_ad_copy(payload)
+
+
+def generate_copy_experiment(payload: dict, providers: list[str] | None = None, *, force_regen: bool = False) -> dict:
+    from .result_cache import get_text_cache, make_text_cache_key, put_text_cache
+    from .runtime_workers import ensure_text_worker, schedule_idle_reap
+
     selected = providers or ["hyperclova", "kanana", "midm", "local", "fallback"]
     results = []
     for provider in selected:
@@ -390,10 +443,24 @@ def generate_copy_experiment(payload: dict, providers: list[str] | None = None) 
                 }
             )
             continue
+
+        if not force_regen:
+            cache_key = make_text_cache_key(payload, provider_id, adapter.model or adapter.default_model)
+            cached = get_text_cache(cache_key)
+            if cached is not None:
+                results.append({"provider": provider_id, "status": "ok", "copy": apply_copy_policy(payload, cached), "cache_hit": True})
+                continue
+
+        ensure_text_worker()
         try:
-            results.append({"provider": provider_id, "status": "ok", "copy": apply_copy_policy(payload, _chat_copy(payload, adapter))})
+            result = apply_copy_policy(payload, _chat_copy(payload, adapter))
+            cache_key = make_text_cache_key(payload, provider_id, adapter.model or adapter.default_model)
+            put_text_cache(cache_key, result)
+            results.append({"provider": provider_id, "status": "ok", "copy": result})
         except Exception as exc:
             results.append({"provider": provider_id, "status": "error", "error": str(exc)})
+
+    schedule_idle_reap()
     return {"providers": available_text_providers()["providers"], "results": results}
 
 
@@ -984,11 +1051,21 @@ def poll_image_job(job_id: str) -> dict | None:
     return public_image_job(job)
 
 
-def create_image_job(payload: dict, image_prompt: str) -> dict:
+def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = False) -> dict:
+    from .result_cache import get_image_cache, make_image_cache_key, put_image_cache
+    from .runtime_workers import ensure_image_worker, schedule_idle_reap
+
     settings = get_settings()
-    job_id = uuid4().hex
     width, height = _image_dimensions(payload)
-    job = {
+
+    cache_key = make_image_cache_key(image_prompt, payload, width, height, settings.comfyui_workflow_path)
+    if not force_regen:
+        cached_job = get_image_cache(cache_key)
+        if cached_job is not None:
+            return cached_job
+
+    job_id = uuid4().hex
+    job: dict = {
         "job_id": job_id,
         "status": "created",
         "provider": "fallback",
@@ -1011,6 +1088,7 @@ def create_image_job(payload: dict, image_prompt: str) -> dict:
             }
         )
     elif backend in {"auto", "comfyui"} and settings.has_comfyui:
+        ensure_image_worker()
         _submit_comfyui_job(job, payload, image_prompt)
     else:
         job.update(
@@ -1021,7 +1099,11 @@ def create_image_job(payload: dict, image_prompt: str) -> dict:
         )
 
     IMAGE_JOB_STORE.save(job)
-    return public_image_job(job)
+    result = public_image_job(job)
+    if job.get("status") not in {"not_configured", "failed"}:
+        put_image_cache(cache_key, result)
+    schedule_idle_reap()
+    return result
 
 
 def public_image_job(job: dict) -> dict:
