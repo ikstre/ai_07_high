@@ -131,6 +131,7 @@ PR #6 은 taeho 브랜치의 모든 현행 커밋을 포함. 머지 시 main 에
 |---|---|---|
 | #4 | STEP converter: trimesh 설치 + `.env` 설정 | `conda run -n sprint_high pip install "trimesh[all]"` |
 | #9 | API 응답 캐싱 | `/ai/providers`(TTL 60s), `/layouts`(TTL 300s), `/render/desk-setup`(GLB 캐시) |
+| #10 | GPU 런타임 캐시 + on-demand worker unload | text/image worker를 요청별로 로드하고 idle 시 VRAM 반환 |
 
 ---
 
@@ -148,7 +149,89 @@ PR #6 은 taeho 브랜치의 모든 현행 커밋을 포함. 머지 시 main 에
 
 ---
 
-## 7. 새 대화창 시작 프롬프트
+## 7. 추가 인수인계: GPU worker 상시 로드 제거
+
+### 배경
+
+현재 ComfyUI는 systemd 서비스로 계속 떠 있고 FLUX.1 schnell weight가 GPU VRAM을 상시 점유한다. 이 상태에서 Hugging Face HyperCLOVA X SEED text worker를 함께 올리면 L4 24GB 환경에서 OOM 또는 성능 저하가 날 수 있다. 사용자가 요청한 다음 작업은 단순 응답 캐싱이 아니라 **GPU에 상주하는 모델을 요청 종류별로 전환하고, 안 쓸 때 내리는 런타임 캐시/eviction 구조**다.
+
+### 다음 구현 목표
+
+| 항목 | 내용 |
+|---|---|
+| 결과 캐시 | text/image payload hash가 hit이면 worker를 새로 띄우지 않고 cached JSON/image 반환 |
+| text worker | `/ai/copy`, `/ai/copy/experiment` cache miss 때만 HyperCLOVA SEED local worker start |
+| image worker | `/ai/image/jobs`, `/ai/poster` image miss 때만 ComfyUI start |
+| exclusive mode | text 요청 전 ComfyUI stop, image 요청 전 text worker stop 으로 VRAM 충돌 방지 |
+| idle unload | 마지막 사용 후 `GPU_WORKER_IDLE_TIMEOUT_SECONDS` 경과 시 worker stop |
+| lock | `data/runtime/gpu_worker.lock` 같은 전역 lock으로 동시 text/image 요청의 worker 전환 충돌 방지 |
+
+### 후보 환경 변수
+
+```bash
+GPU_WORKER_MODE=always_on|on_demand|exclusive
+GPU_WORKER_IDLE_TIMEOUT_SECONDS=600
+GPU_WORKER_LOCK_PATH=data/runtime/gpu_worker.lock
+
+TEXT_WORKER_CMD=conda run -n sprint_high python tools/hyperclova_seed_openai_server.py
+TEXT_WORKER_HEALTH_URL=http://127.0.0.1:11501/health
+
+IMAGE_WORKER_SERVICE=comfyui
+IMAGE_WORKER_HEALTH_URL=http://127.0.0.1:8188/system_stats
+```
+
+### 구현 위치 후보
+
+| 파일 | 역할 |
+|---|---|
+| `backend/runtime_workers.py` | worker health/start/stop, lock, idle timestamp 관리 |
+| `backend/result_cache.py` | text/image cache key 생성 및 JSON/image cache 저장 |
+| `backend/ai.py` | `generate_ad_copy()`, `generate_copy_experiment()`, `create_image_job()` 앞단 cache/worker orchestration 연결 |
+| `start.sh` | `GPU_WORKER_MODE=on_demand|exclusive`면 ComfyUI active를 필수로 보지 않고 필요 시 start 안내 |
+
+### 캐시 키 주의점
+
+| 캐시 | 키 구성 |
+|---|---|
+| text | normalized ad payload + provider id + model id + prompt/policy version |
+| image | `image_prompt` + workflow JSON content hash + dimensions + model config + seed policy |
+
+현재 ComfyUI workflow는 `{seed}`를 시간 기반으로 치환한다. 같은 prompt라도 새 seed면 이미지가 달라지므로, cache hit은 기존 이미지를 반환하고 "강제 재생성" 요청만 seed를 새로 뽑도록 분리해야 한다.
+
+### 검증 체크리스트
+
+1. **기본 회귀**
+   ```bash
+   python -m py_compile backend/ai.py backend/runtime_workers.py backend/result_cache.py
+   python tools/scan_secrets.py --all
+   bash -n start.sh
+   curl -s http://127.0.0.1:8010/health
+   ```
+2. **text cache hit**
+   - 동일 payload로 `/ai/copy/experiment` 2회 호출
+   - 1회차는 miss, 2회차는 hit
+   - 2회차에는 HyperCLOVA/text worker start 로그가 없어야 함
+3. **image cache hit**
+   - 동일 image prompt/workflow/dimensions로 `/ai/image/jobs` 2회 호출
+   - 2회차에는 ComfyUI `/prompt` 호출 없이 cached image/job 반환
+   - cached image로 `/ai/poster` 합성이 정상 동작해야 함
+4. **exclusive worker 전환**
+   - ComfyUI active 상태에서 text miss 요청 → ComfyUI stop 후 text worker start 확인
+   - text worker active 상태에서 image miss 요청 → text worker stop 후 ComfyUI start 확인
+   - 전환 전후 `nvidia-smi`에서 VRAM 점유 변화 확인
+5. **idle unload**
+   - `GPU_WORKER_IDLE_TIMEOUT_SECONDS=30` 으로 낮춰 테스트
+   - 마지막 요청 후 30~60초 내 worker process 종료
+   - `nvidia-smi`에서 해당 python process와 VRAM 점유가 사라지는지 확인
+6. **동시성**
+   - text 요청과 image 요청을 거의 동시에 보내도 lock 때문에 한쪽 worker 전환이 끝난 뒤 다음 요청이 처리되는지 확인
+   - 실패 시 cache와 job store에 partial/깨진 레코드가 남지 않아야 함
+
+상세 계획은 `docs/next_work_2026-06-01.md` 의 `3-3. GPU 런타임 캐시 + on-demand worker unload` 섹션에 추가됨.
+
+---
+
+## 8. 새 대화창 시작 프롬프트
 
 ```
 docs/project_handoff_2026-06-01.md 와 docs/next_work_2026-06-01.md 읽고 작업 진행해줘.
