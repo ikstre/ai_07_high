@@ -289,9 +289,8 @@ DEFAULTS = {
     "image_job_result": None,
     "image_quality_report": None,
     "image_polling_enabled": False,
-    "image_poll_started_at": 0.0,
+    "image_poll_started_at": None,
     "image_poll_timeout_seconds": 180,
-    "image_poster_ready": False,
     "ad_tone": "감성형",
     "image_ratio": "1:1",
     "extra_request": "깔끔하고 고급스러운 데스크셋업 광고 느낌",
@@ -776,6 +775,8 @@ def image_job_is_pending(job: dict | None = None) -> bool:
 
 
 def poster_waiting_for_image() -> bool:
+    if not st.session_state.image_polling_enabled:
+        return False
     return bool(st.session_state.image_job_result) and image_job_is_pending()
 
 
@@ -871,29 +872,39 @@ def generate_poster() -> None:
 def generate_image_job() -> None:
     data = api_post("/ai/image/jobs", build_ad_payload(), timeout=60)
     st.session_state.image_job_result = data
-    st.session_state.copy_result = data["copy"]
-    st.session_state.copy_selected_provider = data["copy"].get("provider")
-    job = data.get("job") or {}
+    copy_result = data.get("copy") if isinstance(data, dict) else None
+    if isinstance(copy_result, dict):
+        st.session_state.copy_result = copy_result
+        st.session_state.copy_selected_provider = copy_result.get("provider")
+    job = data.get("job") if isinstance(data, dict) else {}
+    if not isinstance(job, dict):
+        job = {}
     st.session_state.image_quality_report = None
-    st.session_state.image_poster_ready = job.get("status") == "completed"
     st.session_state.image_polling_enabled = image_job_is_pending(job)
-    st.session_state.image_poll_started_at = time.time() if st.session_state.image_polling_enabled else 0.0
+    st.session_state.image_poll_started_at = time.time() if st.session_state.image_polling_enabled else None
 
 
 def refresh_image_job() -> dict | None:
     current = st.session_state.image_job_result or {}
     job_id = (current.get("job") or {}).get("job_id")
     if job_id:
-        st.session_state.image_job_result = api_get(f"/ai/image/jobs/{job_id}", timeout=30)
-        job = (st.session_state.image_job_result or {}).get("job") or {}
-        st.session_state.image_poster_ready = job.get("status") == "completed"
-        st.session_state.image_polling_enabled = image_job_is_pending(job)
-        if st.session_state.image_polling_enabled and not st.session_state.image_poll_started_at:
+        previous_polling = bool(st.session_state.image_polling_enabled)
+        updated = api_get(f"/ai/image/jobs/{job_id}", timeout=30)
+        if not isinstance(updated, dict) or not isinstance(updated.get("job"), dict):
+            return current.get("job") or None
+        st.session_state.image_job_result = updated
+        job = updated["job"]
+        polling_enabled = image_job_is_pending(job)
+        st.session_state.image_polling_enabled = polling_enabled
+        if polling_enabled and (not previous_polling or st.session_state.image_poll_started_at is None):
             st.session_state.image_poll_started_at = time.time()
+        elif not polling_enabled:
+            st.session_state.image_poll_started_at = None
         return job
     return None
 
 
+@st.fragment(run_every=3)
 def auto_poll_image_job() -> None:
     if not st.session_state.image_polling_enabled:
         return
@@ -901,15 +912,20 @@ def auto_poll_image_job() -> None:
     job = current.get("job") or {}
     if not image_job_is_pending(job):
         st.session_state.image_polling_enabled = False
-        st.session_state.image_poster_ready = job.get("status") == "completed"
+        st.session_state.image_poll_started_at = None
         return
 
-    started_at = float(st.session_state.image_poll_started_at or time.time())
+    started_at = st.session_state.image_poll_started_at
+    if started_at is None:
+        started_at = time.time()
+        st.session_state.image_poll_started_at = started_at
     elapsed = time.time() - started_at
     timeout = int(st.session_state.image_poll_timeout_seconds)
     if elapsed > timeout:
         st.session_state.image_polling_enabled = False
+        st.session_state.image_poll_started_at = None
         st.warning(f"이미지 작업 자동 갱신이 {timeout}초를 초과해 중단되었습니다.")
+        st.rerun()
         return
 
     status_slot = st.empty()
@@ -918,20 +934,20 @@ def auto_poll_image_job() -> None:
         updated = refresh_image_job() or job
     except Exception as exc:
         st.session_state.image_polling_enabled = False
+        st.session_state.image_poll_started_at = None
         st.error(f"이미지 작업 상태 확인 실패: {exc}")
+        st.rerun()
         return
 
     if updated.get("status") == "completed":
         st.session_state.image_polling_enabled = False
-        st.session_state.image_poster_ready = True
+        st.session_state.image_poll_started_at = None
         st.success("이미지 작업 완료. 포스터 생성에 자동으로 연결됩니다.")
         st.rerun()
-    if updated.get("status") in IMAGE_JOB_TERMINAL_STATUSES:
+    elif updated.get("status") in IMAGE_JOB_TERMINAL_STATUSES:
         st.session_state.image_polling_enabled = False
+        st.session_state.image_poll_started_at = None
         st.rerun()
-
-    time.sleep(3)
-    st.rerun()
 
 
 def provider_label(provider: str | None) -> str:
@@ -1470,7 +1486,7 @@ with result_col:
             if image_job_result:
                 job = image_job_result.get("job", {})
                 job_id = job.get("job_id")
-                with st.expander("실사 이미지 작업 상태", expanded=job.get("status") not in {"completed", "not_configured"}):
+                with st.expander("실사 이미지 작업 상태", expanded=job.get("status") not in IMAGE_JOB_TERMINAL_STATUSES):
                     st.caption(f"{job.get('provider', 'fallback')} · {job.get('status', 'unknown')} · {job.get('width', '')}×{job.get('height', '')}")
                     col_refresh, col_quality = st.columns(2)
                     if col_refresh.button("이미지 작업 상태 갱신", use_container_width=True):
