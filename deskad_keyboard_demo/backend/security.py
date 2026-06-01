@@ -45,6 +45,8 @@ _TOKEN_SHAPED_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"\bgho_[A-Za-z0-9]{30,}\b"),
     # OpenAI-style
     re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}\b"),
+    # CLOVA Studio
+    re.compile(r"\bnv-[A-Za-z0-9_\-]{20,}\b"),
     # Anthropic
     re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b"),
     # HuggingFace

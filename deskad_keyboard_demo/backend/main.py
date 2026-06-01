@@ -24,6 +24,7 @@ from .ai import (
     poll_image_job,
     safe_image_reference,
     save_poster_svg,
+    selected_copy_or_generate,
 )
 from .quality_gate import (
     evaluate_and_store,
@@ -108,6 +109,17 @@ class DeskSetupRenderRequest(KeyboardRenderRequest):
     show_internals: bool = Field(default=False)
 
 
+class SelectedCopy(BaseModel):
+    """UI에서 선택한 광고 문구를 포스터/이미지 생성 흐름으로 전달한다."""
+    provider: str = Field(default="selected", max_length=60)
+    headline: str = Field(default="", max_length=80)
+    subcopy: str = Field(default="", max_length=160)
+    cta: str = Field(default="", max_length=40)
+    copies: list[str] = Field(default_factory=list, max_length=5)
+    hashtags: list[str] = Field(default_factory=list, max_length=6)
+    spec_bullets: list[str] = Field(default_factory=list, max_length=5)
+
+
 class AdContentRequest(DeskSetupRenderRequest):
     """광고 문구와 포스터 생성을 위한 상품/타깃/렌더링 정보를 검증한다."""
     product_name: str = Field(default="크림 베이지 65% 커스텀 키보드", max_length=80)
@@ -123,6 +135,7 @@ class AdContentRequest(DeskSetupRenderRequest):
     reference_asset_path: str | None = Field(default=None, max_length=400)
     image_job_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
     poster_template: str = Field(default="minimal_card", pattern=r"^(minimal_card|grid_three|feature_focus|promo_banner)$")
+    selected_copy: SelectedCopy | None = None
 
 
 class UploadedModelRequest(BaseModel):
@@ -139,7 +152,7 @@ class LibraryModelRequest(BaseModel):
 
 
 class CopyExperimentRequest(AdContentRequest):
-    providers: list[str] = Field(default_factory=lambda: ["kanana", "midm", "local", "fallback"])
+    providers: list[str] = Field(default_factory=lambda: ["hyperclova", "kanana", "midm", "local", "fallback"])
 
 
 class PlateDrawingRenderRequest(BaseModel):
@@ -437,21 +450,24 @@ def list_ai_providers():
 
 
 @app.post("/ai/copy")
-def generate_copy(request: AdContentRequest):
-    """광고 문구 생성 요청을 AI 계층으로 전달하고 결과를 반환한다."""
-    return generate_ad_copy(request.model_dump())
+def generate_copy(request: AdContentRequest, force_regen: bool = False):
+    """광고 문구 생성 요청을 AI 계층으로 전달하고 결과를 반환한다.
+
+    force_regen=true 쿼리 파라미터를 추가하면 디스크 캐시를 무시하고 새 카피를 생성한다.
+    """
+    return generate_ad_copy(request.model_dump(), force_regen=force_regen)
 
 
 @app.post("/ai/copy/experiment")
-def run_copy_experiment(request: CopyExperimentRequest):
+def run_copy_experiment(request: CopyExperimentRequest, force_regen: bool = False):
     payload = request.model_dump(exclude={"providers"})
-    return generate_copy_experiment(payload, request.providers)
+    return generate_copy_experiment(payload, request.providers, force_regen=force_regen)
 
 
 @app.post("/ai/image")
 def generate_image_reference(request: AdContentRequest):
     payload = request.model_dump()
-    copy_result = generate_ad_copy(payload)
+    copy_result = selected_copy_or_generate(payload)
     image_prompt = build_image_prompt(payload, copy_result)
     image_reference = generate_local_image_reference(payload, image_prompt)
     safe_reference = safe_image_reference(image_reference)
@@ -464,11 +480,15 @@ def generate_image_reference(request: AdContentRequest):
 
 
 @app.post("/ai/image/jobs")
-def create_image_generation_job(request: AdContentRequest):
+def create_image_generation_job(request: AdContentRequest, force_regen: bool = False):
+    """이미지 생성 작업을 큐에 넣고 job 메타데이터를 반환한다.
+
+    force_regen=true 쿼리 파라미터를 추가하면 캐시를 무시하고 새 seed로 이미지를 생성한다.
+    """
     payload = request.model_dump()
-    copy_result = generate_ad_copy(payload)
+    copy_result = selected_copy_or_generate(payload)
     image_prompt = build_image_prompt(payload, copy_result)
-    job = create_image_job(payload, image_prompt)
+    job = create_image_job(payload, image_prompt, force_regen=force_regen)
     return {"copy": copy_result, "image_prompt": image_prompt, "job": job}
 
 
@@ -520,7 +540,7 @@ def quality_summary():
 def generate_poster(request: AdContentRequest):
     """광고 문구, 이미지 프롬프트, 포스터 SVG 생성을 묶어서 처리한다."""
     payload = request.model_dump()
-    copy_result = generate_ad_copy(payload)
+    copy_result = selected_copy_or_generate(payload)
     image_prompt = build_image_prompt(payload, copy_result)
 
     image_reference = None

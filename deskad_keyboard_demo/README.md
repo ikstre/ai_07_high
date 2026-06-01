@@ -57,6 +57,32 @@ systemctl status comfyui --no-pager
 journalctl -u comfyui -f
 ```
 
+### 3-1. HyperCLOVA X SEED 로컬 실행(Hugging Face, 선택)
+
+HyperCLOVA X SEED 공개 weight는 Hugging Face에서 받아 OpenAI-compatible 서버로 띄운 뒤 `hyperclova` provider에 연결할 수 있습니다. 모델 파일 접근에 동의가 필요한 gated repo이므로 Hugging Face에서 조건을 먼저 승인하고, 필요한 경우 `.env`에 `HF_TOKEN`을 넣습니다.
+
+이 VM은 L4 24GB GPU를 쓰며 ComfyUI가 켜져 있으면 VRAM을 함께 사용합니다. 광고 문구 생성에는 우선 `Text-Instruct-1.5B`를 권장하고, VRAM이 부족하면 `0.5B`로 낮춥니다.
+
+```bash
+cd deskad_keyboard_demo
+
+# .env 예시
+HYPERCLOVA_BASE_URL=http://127.0.0.1:11501/v1
+HYPERCLOVA_MODEL=naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B
+HYPERCLOVA_USE_DIRECT_API=false
+HF_TOKEN=<huggingface-token-if-required>
+
+# 모델은 첫 실행 시 Hugging Face cache로 다운로드됩니다.
+conda run -n sprint_high python tools/hyperclova_seed_openai_server.py
+```
+
+다른 터미널에서 확인:
+
+```bash
+curl -s http://127.0.0.1:11501/health
+curl -s http://127.0.0.1:8010/ai/providers
+```
+
 ### 4. 개별 실행
 
 **백엔드 (FastAPI, 포트 8010)**

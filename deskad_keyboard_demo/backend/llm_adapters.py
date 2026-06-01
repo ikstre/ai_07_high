@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import requests
@@ -15,6 +16,11 @@ def normalize_chat_completions_url(base_url: str) -> str:
     if "/v1/" in base:
         return f"{base}/chat/completions"
     return f"{base}/v1/chat/completions"
+
+
+def is_loopback_base_url(base_url: str) -> bool:
+    parsed = urlparse(base_url or "")
+    return parsed.hostname in {"127.0.0.1", "localhost", "::1"}
 
 
 @dataclass(frozen=True)
@@ -75,8 +81,8 @@ class HyperClovaDirectAdapter:
 
     Distinct from the OpenAI-compatible gateway path: uses a different request schema
     (maxTokens, topP, repeatPenalty, etc.) and Naver Cloud-specific headers.
-    Endpoint pattern: {base_url}/v1/api-tools/chat-completions/{model}
-    or legacy:        {base_url}/testapp/v1/chat-completions/{model}
+    Endpoint pattern: {base_url}/v1/chat-completions/{model}
+    or app-prefixed:  {base_url}/{testapp|serviceapp}/v1/chat-completions/{model}
     """
 
     name: str
@@ -85,7 +91,7 @@ class HyperClovaDirectAdapter:
     api_key: str = ""
     apigw_key: str = ""
     request_id_prefix: str = "deskad"
-    default_model: str = "HCX-003"
+    default_model: str = "HCX-005"
     max_tokens: int = 512
     temperature: float = 0.5
     top_p: float = 0.8
@@ -104,14 +110,18 @@ class HyperClovaDirectAdapter:
         model = self.model or self.default_model
         if "/chat-completions/" in base:
             return base
+        if base.endswith("/v1") or base.endswith("/v3"):
+            return f"{base}/chat-completions/{model}"
+        if base.endswith("/testapp") or base.endswith("/serviceapp"):
+            return f"{base}/v1/chat-completions/{model}"
         if self.legacy_path:
             return f"{base}/testapp/v1/chat-completions/{model}"
-        return f"{base}/v1/api-tools/chat-completions/{model}"
+        return f"{base}/v1/chat-completions/{model}"
 
     def request(self, *, system_prompt: str, user_prompt: str, timeout: int) -> str:
         headers = {
             "Content-Type": "application/json",
-            "X-NCP-CLOVASTUDIO-API-KEY": self.api_key,
+            "Authorization": f"Bearer {self.api_key}",
             "X-NCP-CLOVASTUDIO-REQUEST-ID": f"{self.request_id_prefix}-{uuid4().hex[:12]}",
         }
         if self.apigw_key:

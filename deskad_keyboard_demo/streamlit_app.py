@@ -240,6 +240,7 @@ DEFAULTS = {
     "selected_reference_path": None,
     "copy_result": None,
     "copy_experiment_result": None,
+    "copy_selected_provider": None,
     "poster_result": None,
     "image_job_result": None,
     "image_quality_report": None,
@@ -316,6 +317,15 @@ POSTER_TEMPLATE_LABELS = {
     "grid_three": "Grid 3컷 (라이프스타일)",
     "feature_focus": "Feature Focus (스펙 강조)",
     "promo_banner": "Promo Banner (할인/광고)",
+}
+
+PROVIDER_LABELS = {
+    "openai": "OpenAI",
+    "hyperclova": "HyperCLOVA",
+    "kanana": "Kanana",
+    "midm": "Mi:dm",
+    "local": "Local",
+    "fallback": "Fallback",
 }
 
 # 각 템플릿의 실제 backend SVG 레이아웃을 단순화한 140x100 미리보기 (선택 전 비교용).
@@ -399,7 +409,11 @@ KEYBOARD_SIZE_INFO = {
     "60": "60% (약 28.6 × 9.5 cm, 61키)",
     "65": "65% (약 30.5 × 9.5 cm, 67키)",
     "75": "75% (약 30.5 × 11.4 cm, 84키)",
+    "87": "TKL 80% (약 34.8 × 11.4 cm, 87키)",
+    "104": "풀배열 100% (약 42.9 × 11.4 cm, 104키)",
 }
+
+DEFAULT_LAYOUT_FALLBACK = ["60", "65", "75", "87", "104"]
 
 for key, value in DEFAULTS.items():
     st.session_state.setdefault(key, value.copy() if isinstance(value, list) else value)
@@ -428,6 +442,22 @@ KEYBOARD_MODEL_DEFAULTS = {
     "HHKB Style 60": {
         "layout": "60",
         "description": "60% 배열, 화살표 클러스터 없는 클래식 미니멀 키보드",
+    },
+    "Keychron Q3 TKL": {
+        "layout": "87",
+        "description": "87키 텐키리스 알루미늄 키보드, 게이밍/사무용 만능 셋업",
+    },
+    "Leopold FC750R": {
+        "layout": "87",
+        "description": "TKL 80% 클래식, PBT 키캡 + 무각 디자인의 사무용 표준",
+    },
+    "Keychron Q6 Full": {
+        "layout": "104",
+        "description": "풀배열 100% 알루미늄 케이스, 텐키 필요한 회계/데이터 업무용",
+    },
+    "Royal Kludge RK104": {
+        "layout": "104",
+        "description": "풀배열 무선 키보드, 책상이 넓은 스튜디오/홈오피스 셋업",
     },
 }
 
@@ -523,6 +553,17 @@ def fetch_desk_assets() -> list[dict]:
         return api_get("/assets/desk")["assets"]
     except Exception:
         return FALLBACK_ASSETS
+
+
+@st.cache_data(ttl=60)
+def fetch_layout_ids() -> list[str]:
+    try:
+        payload = api_get("/layouts")
+        layouts = payload.get("layouts") or []
+        ids = [item["id"] for item in layouts if isinstance(item, dict) and item.get("id")]
+        return ids or list(DEFAULT_LAYOUT_FALLBACK)
+    except Exception:
+        return list(DEFAULT_LAYOUT_FALLBACK)
 
 
 @st.cache_data(ttl=30)
@@ -631,7 +672,7 @@ def current_image_job_id() -> str | None:
 
 
 def build_ad_payload() -> dict:
-    return {
+    payload = {
         **build_render_payload(),
         "product_name": st.session_state.product_name,
         "product_type": st.session_state.product_type,
@@ -647,6 +688,27 @@ def build_ad_payload() -> dict:
         "image_job_id": current_image_job_id(),
         "poster_template": st.session_state.poster_template,
     }
+    selected_copy = selected_copy_payload(st.session_state.copy_result)
+    if selected_copy:
+        payload["selected_copy"] = selected_copy
+    return payload
+
+
+def selected_copy_payload(copy_result: dict | None) -> dict | None:
+    if not isinstance(copy_result, dict):
+        return None
+    selected = {
+        "provider": copy_result.get("provider") or st.session_state.get("copy_selected_provider") or "selected",
+        "headline": copy_result.get("headline") or "",
+        "subcopy": copy_result.get("subcopy") or "",
+        "cta": copy_result.get("cta") or "",
+        "copies": list(copy_result.get("copies") or [])[:5],
+        "hashtags": list(copy_result.get("hashtags") or [])[:6],
+        "spec_bullets": list(copy_result.get("spec_bullets") or [])[:5],
+    }
+    if not selected["headline"] and not selected["copies"]:
+        return None
+    return selected
 
 
 def render_desk_setup() -> None:
@@ -674,23 +736,35 @@ def prepare_library_model(path: str) -> None:
 
 def generate_copy() -> None:
     st.session_state.copy_result = api_post("/ai/copy", build_ad_payload(), timeout=45)
+    st.session_state.copy_selected_provider = st.session_state.copy_result.get("provider")
 
 
 def generate_copy_experiment() -> None:
-    payload = {**build_ad_payload(), "providers": ["kanana", "midm", "local", "fallback"]}
+    providers = [
+        item.get("id")
+        for item in fetch_ai_providers().get("providers", [])
+        if item.get("configured") and item.get("id") and item.get("id") != "fallback"
+    ]
+    if "fallback" not in providers:
+        providers.append("fallback")
+    payload = {**build_ad_payload(), "providers": providers or ["fallback"]}
     st.session_state.copy_experiment_result = api_post("/ai/copy/experiment", payload, timeout=90)
+    st.session_state.copy_result = None
+    st.session_state.copy_selected_provider = None
 
 
 def generate_poster() -> None:
     data = api_post("/ai/poster", build_ad_payload(), timeout=60)
     st.session_state.poster_result = data
     st.session_state.copy_result = data["copy"]
+    st.session_state.copy_selected_provider = data["copy"].get("provider")
 
 
 def generate_image_job() -> None:
     data = api_post("/ai/image/jobs", build_ad_payload(), timeout=60)
     st.session_state.image_job_result = data
     st.session_state.copy_result = data["copy"]
+    st.session_state.copy_selected_provider = data["copy"].get("provider")
 
 
 def refresh_image_job() -> None:
@@ -698,6 +772,59 @@ def refresh_image_job() -> None:
     job_id = (current.get("job") or {}).get("job_id")
     if job_id:
         st.session_state.image_job_result = api_get(f"/ai/image/jobs/{job_id}", timeout=30)
+
+
+def provider_label(provider: str | None) -> str:
+    provider_id = (provider or "unknown").strip().lower()
+    return PROVIDER_LABELS.get(provider_id, provider_id or "unknown")
+
+
+def render_copy_experiment_picker() -> None:
+    experiment = st.session_state.copy_experiment_result
+    if not experiment:
+        return
+
+    results = experiment.get("results") or []
+    if not results:
+        st.caption("생성 후보가 없습니다.")
+        return
+
+    st.markdown("#### 광고 문구 후보")
+    selected_provider = st.session_state.get("copy_selected_provider")
+    if st.session_state.copy_result:
+        st.success(f"{provider_label(selected_provider)} 문구가 선택되었습니다. 포스터와 이미지 작업에 이 문구가 반영됩니다.")
+
+    columns = st.columns(min(2, max(1, len(results))))
+    for index, item in enumerate(results):
+        provider = item.get("provider", "unknown")
+        label = provider_label(provider)
+        status = item.get("status", "unknown")
+        copy = item.get("copy") or {}
+        with columns[index % len(columns)]:
+            with st.container(border=True):
+                st.caption(f"{label} · {status}")
+                if copy:
+                    st.markdown(f"**{copy.get('headline') or '제목 없음'}**")
+                    if copy.get("subcopy"):
+                        st.write(copy["subcopy"])
+                    for line in (copy.get("copies") or [])[:2]:
+                        st.caption(line)
+                    hashtags = " ".join((copy.get("hashtags") or [])[:4])
+                    if hashtags:
+                        st.caption(hashtags)
+                    if st.button("이 문구 사용", key=f"use_copy_{index}_{provider}", use_container_width=True):
+                        selected = selected_copy_payload({**copy, "provider": copy.get("provider") or provider})
+                        if selected:
+                            st.session_state.copy_result = selected
+                            st.session_state.copy_selected_provider = provider
+                            st.rerun()
+                elif status == "not_configured":
+                    st.caption("이 provider는 현재 환경 변수 설정이 없어 건너뜁니다.")
+                    st.caption(f"model: {item.get('model', 'default')}")
+                elif item.get("error"):
+                    st.caption(f"오류: {item['error']}")
+                else:
+                    st.caption("응답 문구가 없습니다.")
 
 
 def go_next() -> None:
@@ -815,11 +942,11 @@ with left_col:
                 key="keyboard_model",
                 on_change=sync_layout_from_model,
             )
-            layout_options = ["60", "65", "75"]
+            layout_options = fetch_layout_ids()
             st.session_state.layout = st.selectbox(
                 "배열",
                 layout_options,
-                index=layout_options.index(st.session_state.layout) if st.session_state.layout in layout_options else 1,
+                index=layout_options.index(st.session_state.layout) if st.session_state.layout in layout_options else min(1, len(layout_options) - 1),
                 format_func=lambda k: KEYBOARD_SIZE_INFO.get(k, k + "%"),
             )
             st.session_state.drawing_upload_mode = st.radio(
@@ -1059,19 +1186,13 @@ with left_col:
                 st.caption(f"Image {config_now.get('image_model_backend', 'auto')} / local {local_img_status} / ComfyUI {comfyui_status}")
             st.session_state.extra_request = st.text_area("추가 요청", st.session_state.extra_request, height=110)
 
-            col_copy, col_exp, col_image, col_poster = st.columns(4)
+            col_copy, col_image, col_poster = st.columns(3)
             if col_copy.button("광고 문구 생성", type="secondary", use_container_width=True):
                 try:
-                    generate_copy()
-                    st.success("광고 문구 생성 완료")
+                    generate_copy_experiment()
+                    st.success("광고 문구 후보 생성 완료")
                 except Exception as exc:
                     st.error(f"문구 생성 실패: {exc}")
-            if col_exp.button("한글 모델 비교", type="secondary", use_container_width=True):
-                try:
-                    generate_copy_experiment()
-                    st.success("모델 비교 완료")
-                except Exception as exc:
-                    st.error(f"모델 비교 실패: {exc}")
             if col_image.button("실사 이미지 작업", type="secondary", use_container_width=True):
                 try:
                     generate_image_job()
@@ -1089,6 +1210,7 @@ with left_col:
             if providers:
                 configured = [item["id"] for item in providers if item.get("configured") and item.get("id") != "fallback"]
                 st.caption(f"사용 가능 provider: {', '.join(configured) if configured else 'fallback only'}")
+            render_copy_experiment_picker()
 
     nav_a, nav_b = st.columns(2)
     if nav_a.button("이전", use_container_width=True, disabled=st.session_state.step <= 1):
@@ -1224,24 +1346,16 @@ with result_col:
             st.markdown("#### 생성 문구")
             result = st.session_state.copy_result
             if result:
+                st.caption(f"선택 provider: {provider_label(st.session_state.get('copy_selected_provider') or result.get('provider'))}")
+                if result.get("headline"):
+                    st.write(f"**{result['headline']}**")
                 for copy in result.get("copies", [])[:3]:
                     st.write(f"- {copy}")
                 st.caption(" ".join(result.get("hashtags", [])))
                 if result.get("error"):
                     st.caption(f"fallback note: {result['error']}")
             else:
-                st.caption("광고 콘텐츠 단계에서 문구를 생성하면 여기에 표시됩니다.")
-
-            experiment = st.session_state.copy_experiment_result
-            if experiment:
-                with st.expander("한글 모델 비교 결과", expanded=False):
-                    for item in experiment.get("results", []):
-                        st.markdown(f"**{item.get('provider')}** · {item.get('status')}")
-                        copy = item.get("copy") or {}
-                        if copy:
-                            st.write(copy.get("headline", ""))
-                            st.caption(" / ".join(copy.get("copies", [])[:2]))
-                        elif item.get("error"):
-                            st.caption(item["error"])
-                        else:
-                            st.caption(item.get("model", "not configured"))
+                if st.session_state.copy_experiment_result:
+                    st.caption("광고 콘텐츠 단계의 후보 카드에서 사용할 문구를 선택하세요.")
+                else:
+                    st.caption("광고 콘텐츠 단계에서 문구를 생성하면 여기에 표시됩니다.")

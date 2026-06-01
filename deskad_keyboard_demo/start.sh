@@ -117,10 +117,11 @@ preflight() {
 }
 
 check_model_workers() {
-  local image_backend comfyui_base comfyui_workflow comfyui_stats
+  local image_backend comfyui_base comfyui_workflow comfyui_stats gpu_worker_mode
   image_backend=$(env_value IMAGE_MODEL_BACKEND "auto")
   comfyui_base=$(env_value COMFYUI_BASE_URL "")
   comfyui_workflow=$(env_value COMFYUI_WORKFLOW_PATH "")
+  gpu_worker_mode=$(env_value GPU_WORKER_MODE "always_on")
 
   if [[ -n "$comfyui_base" || "$image_backend" == "comfyui" ]]; then
     if [[ -n "$comfyui_workflow" && ! -f "$SCRIPT_DIR/$comfyui_workflow" && ! -f "$comfyui_workflow" ]]; then
@@ -128,7 +129,15 @@ check_model_workers() {
     fi
 
     comfyui_stats="${comfyui_base%/}/system_stats"
-    if service_active "$COMFYUI_SERVICE"; then
+    if [[ "$gpu_worker_mode" == "on_demand" || "$gpu_worker_mode" == "exclusive" ]]; then
+      # on_demand/exclusive 모드에서는 ComfyUI active 필수 아님 — 요청 시 자동 기동
+      if service_active "$COMFYUI_SERVICE" || ( [[ -n "$comfyui_base" && "$comfyui_base" == http* ]] && url_ready "$comfyui_stats" ); then
+        log "ComfyUI worker 현재 active (GPU_WORKER_MODE=${gpu_worker_mode}, idle 후 자동 종료됨)."
+      else
+        log "ComfyUI worker 현재 inactive — GPU_WORKER_MODE=${gpu_worker_mode}: 이미지 요청 시 자동 기동합니다."
+        log "  수동 기동: sudo systemctl start ${COMFYUI_SERVICE}"
+      fi
+    elif service_active "$COMFYUI_SERVICE"; then
       log "ComfyUI systemd 서비스 active (${COMFYUI_SERVICE}.service)."
     elif [[ -n "$comfyui_base" && "$comfyui_base" == http* ]] && url_ready "$comfyui_stats"; then
       warn "ComfyUI endpoint는 응답하지만 ${COMFYUI_SERVICE}.service가 active가 아닙니다. 수동 실행 상태일 수 있습니다."
@@ -156,6 +165,17 @@ check_model_workers() {
     else
       warn "Ollama가 준비되지 않았습니다. 로컬 한국어 LLM 슬롯은 fallback으로 동작할 수 있습니다."
       warn "  상태 확인: systemctl status ${OLLAMA_SERVICE}"
+    fi
+  fi
+
+  local hyperclova_base
+  hyperclova_base=$(env_value HYPERCLOVA_BASE_URL "")
+  if [[ "$hyperclova_base" == http://127.0.0.1* || "$hyperclova_base" == http://localhost* ]]; then
+    if url_ready "${hyperclova_base%/}/models"; then
+      log "HyperCLOVA X SEED 로컬 endpoint 준비 완료."
+    else
+      warn "HyperCLOVA X SEED 로컬 endpoint가 준비되지 않았습니다."
+      warn "  실행: conda run -n ${CONDA_ENV} python tools/hyperclova_seed_openai_server.py"
     fi
   fi
 }

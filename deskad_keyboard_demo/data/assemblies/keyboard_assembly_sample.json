@@ -28,5 +28,12 @@
       "type": "cherry_profile_preview",
       "source": "layout_json"
     }
+  },
+  "plate_sources_by_layout": {
+    "60": "data/drawings/keyboard_layout_plate_65.json",
+    "65": "data/drawings/keyboard_layout_plate_65.json",
+    "75": "data/drawings/keyboard_layout_plate_75.json",
+    "87": "data/drawings/keyboard_layout_plate_87.json",
+    "104": "data/drawings/keyboard_layout_plate_104.json"
   }
 }
