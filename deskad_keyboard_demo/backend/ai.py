@@ -85,7 +85,9 @@ def _flag_prompt_injection(*texts: str) -> bool:
 
 
 def _request_json(url: str, *, headers: dict, payload: dict, timeout: int) -> dict:
-    response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    session = requests.Session()
+    session.trust_env = False
+    response = session.post(url, headers=headers, json=payload, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
@@ -725,6 +727,103 @@ def generate_local_image_reference(payload: dict, image_prompt: str) -> dict | N
     return summary
 
 
+def generate_openai_image_reference(payload: dict, image_prompt: str) -> dict | None:
+    settings = get_settings()
+    if not settings.has_openai_image:
+        return None
+    model = settings.openai_image_model.strip().lower()
+    request_payload: dict = {}
+    try:
+        width, height = _image_dimensions(payload)
+        size = f"{width}x{height}" if width == height else "1024x1024"
+        request_payload = {
+            "model": model,
+            "prompt": image_prompt,
+            "size": size,
+            "n": 1,
+            "response_format": "b64_json",
+        }
+        result = _request_json(
+            f"{settings.openai_base_url.rstrip('/')}/images/generations",
+            headers={"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"},
+            payload=request_payload,
+            timeout=max(settings.request_timeout_seconds, 120),
+        )
+    except requests.HTTPError as exc:
+        response_text = getattr(exc.response, "text", "") if getattr(exc, "response", None) is not None else ""
+        if "response_format" not in response_text:
+            return {
+                "provider": "openai_image",
+                "model": model,
+                "error": f"{exc}: {response_text[:700]}" if response_text else str(exc),
+                "has_image": False,
+            }
+        try:
+            request_payload.pop("response_format", None)
+            result = _request_json(
+                f"{settings.openai_base_url.rstrip('/')}/images/generations",
+                headers={"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"},
+                payload=request_payload,
+                timeout=max(settings.request_timeout_seconds, 120),
+            )
+        except Exception as retry_exc:
+            retry_response_text = (
+                getattr(retry_exc.response, "text", "")
+                if getattr(retry_exc, "response", None) is not None
+                else ""
+            )
+            return {
+                "provider": "openai_image",
+                "model": model,
+                "error": f"{retry_exc}: {retry_response_text[:700]}" if retry_response_text else str(retry_exc),
+                "has_image": False,
+            }
+    except Exception as exc:
+        return {
+            "provider": "openai_image",
+            "model": model,
+            "error": str(exc),
+            "has_image": False,
+        }
+
+    image_b64 = _decode_local_image_to_b64(result)
+    summary: dict = {"provider": "openai_image", "model": model, "has_image": bool(image_b64)}
+    if image_b64:
+        summary["image_b64"] = image_b64
+    else:
+        summary["raw_keys"] = list(result.keys()) if isinstance(result, dict) else []
+    return summary
+
+
+def generate_image_reference(payload: dict, image_prompt: str) -> dict | None:
+    settings = get_settings()
+    backend = settings.image_model_backend.lower()
+    errors: list[str] = []
+
+    if backend in {"auto", "openai"} and settings.has_openai_image:
+        result = generate_openai_image_reference(payload, image_prompt)
+        if isinstance(result, dict) and result.get("has_image"):
+            return result
+        if isinstance(result, dict) and result.get("error"):
+            errors.append(f"openai_image: {result['error']}")
+            if backend == "openai":
+                return {**result, "error": "; ".join(errors)}
+
+    if backend in {"auto", "local", "local_endpoint"} and settings.has_local_image:
+        result = generate_local_image_reference(payload, image_prompt)
+        if isinstance(result, dict) and result.get("has_image"):
+            return result
+        if isinstance(result, dict) and result.get("error"):
+            errors.append(f"local_image: {result['error']}")
+            return {**result, "error": "; ".join(errors)}
+        if result is not None:
+            return result
+
+    if errors:
+        return {"provider": "image_fallback", "has_image": False, "error": "; ".join(errors)}
+    return None
+
+
 _BACKEND_BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -757,6 +856,7 @@ def _image_backend_config() -> dict:
     settings = get_settings()
     return {
         "backend": settings.image_model_backend,
+        "openai_image_model": "set" if settings.openai_image_model else "missing",
         "local_image_endpoint": "set" if settings.local_image_endpoint else "missing",
         "comfyui_base_url": "set" if settings.comfyui_base_url else "missing",
         "comfyui_workflow_path": "set" if settings.comfyui_workflow_path else "missing",
@@ -920,7 +1020,17 @@ def create_image_job(payload: dict, image_prompt: str) -> dict:
     }
     backend = settings.image_model_backend.lower()
 
-    if backend in {"auto", "local", "local_endpoint"} and settings.has_local_image:
+    if backend in {"auto", "openai"} and settings.has_openai_image:
+        image_reference = generate_openai_image_reference(payload, image_prompt)
+        job.update(
+            {
+                "provider": "openai_image",
+                "status": "completed" if isinstance(image_reference, dict) and image_reference.get("has_image") else "failed",
+                "local_image_reference": image_reference,
+                "completed_at": int(time.time()),
+            }
+        )
+    elif backend in {"auto", "local", "local_endpoint"} and settings.has_local_image:
         image_reference = generate_local_image_reference(payload, image_prompt)
         job.update(
             {
@@ -936,7 +1046,7 @@ def create_image_job(payload: dict, image_prompt: str) -> dict:
         job.update(
             {
                 "status": "not_configured",
-                "message": "Set LOCAL_IMAGE_ENDPOINT or COMFYUI_BASE_URL/COMFYUI_WORKFLOW_PATH to enable image generation.",
+                "message": "Set OPENAI_IMAGE_MODEL, LOCAL_IMAGE_ENDPOINT, or COMFYUI_BASE_URL/COMFYUI_WORKFLOW_PATH to enable image generation.",
             }
         )
 

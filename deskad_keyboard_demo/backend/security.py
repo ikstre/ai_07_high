@@ -132,15 +132,20 @@ class SecretLogFilter(logging.Filter):
             text = pattern.sub("[REDACTED]", text)
         return text
 
+    def _scrub_arg(self, value: object) -> object:
+        if isinstance(value, str):
+            return self._scrub(value)
+        return value
+
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             if isinstance(record.msg, str):
                 record.msg = self._scrub(record.msg)
             if record.args:
                 if isinstance(record.args, dict):
-                    record.args = {key: self._scrub(str(value)) for key, value in record.args.items()}
+                    record.args = {key: self._scrub_arg(value) for key, value in record.args.items()}
                 else:
-                    record.args = tuple(self._scrub(str(arg)) for arg in record.args)
+                    record.args = tuple(self._scrub_arg(arg) for arg in record.args)
         except Exception:
             return True
         return True

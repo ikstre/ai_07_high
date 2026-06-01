@@ -58,7 +58,9 @@ class ChatCompletionAdapter:
         if self.json_response_format:
             body["response_format"] = {"type": "json_object"}
 
-        response = requests.post(
+        session = requests.Session()
+        session.trust_env = False
+        response = session.post(
             normalize_chat_completions_url(self.base_url),
             headers=headers,
             json=body,
@@ -131,7 +133,9 @@ class HyperClovaDirectAdapter:
             "includeAiFilters": True,
         }
 
-        response = requests.post(self._endpoint(), headers=headers, json=body, timeout=timeout)
+        session = requests.Session()
+        session.trust_env = False
+        response = session.post(self._endpoint(), headers=headers, json=body, timeout=timeout)
         response.raise_for_status()
         result = response.json() or {}
         message = (result.get("result") or {}).get("message") or {}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import os
 from pathlib import Path
 
@@ -40,20 +41,20 @@ st.markdown(
     """
     <style>
       .block-container {
-        max-width: 1680px;
+        max-width: min(96vw, 1920px);
         padding-top: 2rem;
         padding-bottom: 2rem;
-        padding-left: 3rem;
-        padding-right: 3rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
       }
 
       [data-testid="stSidebar"] {
-        width: 300px !important;
-        min-width: 300px !important;
+        width: 280px !important;
+        min-width: 280px !important;
       }
 
       [data-testid="stSidebar"] > div {
-        width: 300px !important;
+        width: 280px !important;
       }
 
       .section-label {
@@ -182,6 +183,48 @@ st.markdown(
         display: block;
         width: 100%;
         height: auto;
+      }
+
+      .ad-preview-card {
+        min-height: 220px;
+        padding: 28px 30px;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 10px;
+        background: linear-gradient(135deg, rgba(248, 250, 252, 0.05), rgba(148, 163, 184, 0.08));
+      }
+      .ad-preview-card h3 {
+        margin: 0 0 14px 0;
+        font-size: 26px;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+      .ad-preview-card .subcopy {
+        margin: 0 0 18px 0;
+        font-size: 17px;
+        line-height: 1.65;
+        color: rgba(229, 231, 235, 0.86);
+      }
+      .ad-preview-card ul {
+        margin: 0 0 18px 20px;
+        padding: 0;
+      }
+      .ad-preview-card li {
+        margin-bottom: 8px;
+        line-height: 1.55;
+      }
+      .ad-preview-card .meta {
+        color: rgba(156, 163, 175, 0.92);
+        font-size: 14px;
+      }
+      .ad-preview-card .cta {
+        display: inline-block;
+        margin-top: 16px;
+        padding: 9px 14px;
+        border-radius: 8px;
+        background: #2563eb;
+        color: #ffffff;
+        font-weight: 700;
+        font-size: 14px;
       }
     </style>
     """,
@@ -491,6 +534,40 @@ def fetch_text_asset(url: str) -> str:
     return response.text
 
 
+def responsive_svg_document(svg: str) -> str:
+    return f"""
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          html, body {{
+            margin: 0;
+            width: 100%;
+            min-height: 100%;
+            background: transparent;
+            overflow: hidden;
+          }}
+          .poster-frame {{
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0;
+          }}
+          .poster-frame svg {{
+            display: block;
+            width: 100%;
+            height: auto;
+            max-width: 100%;
+          }}
+        </style>
+      </head>
+      <body>
+        <div class="poster-frame">{svg}</div>
+      </body>
+    </html>
+    """
+
+
 @st.cache_data(ttl=15)
 def fetch_security_config() -> dict:
     try:
@@ -547,8 +624,14 @@ def sync_layout_from_model() -> None:
         st.session_state.layout = defaults["layout"]
 
 
+def set_step(step: int) -> None:
+    step = max(1, min(len(STEP_LABELS), int(step)))
+    st.session_state.step = step
+    st.session_state.step_selector = step
+
+
 def sync_step_from_sidebar() -> None:
-    st.session_state.step = st.session_state.step_selector
+    set_step(st.session_state.step_selector)
 
 
 def render_model_viewer(model_url: str, height: int = 720, camera: str | None = None) -> None:
@@ -703,7 +786,11 @@ def refresh_image_job() -> None:
 def go_next() -> None:
     if st.session_state.step == 3 and not st.session_state.model_url:
         render_desk_setup()
-    st.session_state.step = min(4, st.session_state.step + 1)
+    set_step(st.session_state.step + 1)
+
+
+def go_previous() -> None:
+    set_step(st.session_state.step - 1)
 
 
 def render_step_progress() -> None:
@@ -741,7 +828,7 @@ with st.sidebar:
     st.divider()
 
     st.markdown("### 작업 단계")
-    st.session_state.step = st.radio(
+    st.radio(
         "현재 단계",
         options=list(STEP_LABELS.keys()),
         format_func=lambda value: f"{value}. {STEP_LABELS[value]}",
@@ -779,10 +866,10 @@ with st.sidebar:
 
 render_step_progress()
 
-left_col, result_col = st.columns([0.62, 1.35], gap="large")
+left_col, result_col = st.columns([0.72, 1.85], gap="large")
 
 with left_col:
-    st.markdown('<div class="section-label">INPUT PANEL / 620 x 500</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">INPUT PANEL / responsive</div>', unsafe_allow_html=True)
     with st.container(border=True, height=500):
         if st.session_state.step == 1:
             st.markdown("#### 상품 정보")
@@ -1091,19 +1178,22 @@ with left_col:
                 st.caption(f"사용 가능 provider: {', '.join(configured) if configured else 'fallback only'}")
 
     nav_a, nav_b = st.columns(2)
-    if nav_a.button("이전", use_container_width=True, disabled=st.session_state.step <= 1):
-        st.session_state.step -= 1
-        st.rerun()
-    if nav_b.button("다음", use_container_width=True, disabled=st.session_state.step >= 4):
-        try:
-            go_next()
-            st.rerun()
-        except Exception as exc:
-            st.error(f"다음 단계 처리 실패: {exc}")
+    nav_a.button(
+        "이전",
+        use_container_width=True,
+        disabled=st.session_state.step <= 1,
+        on_click=go_previous,
+    )
+    nav_b.button(
+        "다음",
+        use_container_width=True,
+        disabled=st.session_state.step >= 4,
+        on_click=go_next,
+    )
 
 
 with result_col:
-    st.markdown('<div class="section-label">RESULT CANVAS / 1000 x 1000</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">RESULT CANVAS / responsive</div>', unsafe_allow_html=True)
     with st.container(border=True, height=1000):
         top_a, top_b, top_c = st.columns([0.45, 0.3, 0.25])
         with top_a:
@@ -1157,18 +1247,19 @@ with result_col:
             poster = st.session_state.poster_result
             if poster:
                 template_label = POSTER_TEMPLATE_LABELS.get(poster.get("poster_template", ""), poster.get("poster_template", ""))
+                image_reference = poster.get("image_reference") or poster.get("local_image_reference") or {}
                 badge = f"`{template_label}`"
                 if poster.get("image_embedded"):
-                    badge += "  ·  🖼️ 로컬 이미지 합성"
-                elif (poster.get("local_image_reference") or {}).get("error"):
-                    badge += "  ·  ⚠️ 로컬 이미지 endpoint 오류"
+                    badge += "  ·  이미지 합성"
+                elif image_reference.get("error"):
+                    badge += "  ·  이미지 생성 오류"
                 st.caption(badge)
-                components.html(fetch_text_asset(poster["poster_url"]), height=600, scrolling=True)
+                components.html(responsive_svg_document(fetch_text_asset(poster["poster_url"])), height=760, scrolling=False)
                 with st.expander("이미지 생성 프롬프트", expanded=False):
                     st.write(poster["image_prompt"])
-                if poster.get("local_image_reference"):
+                if image_reference:
                     with st.expander("이미지 모델 응답", expanded=False):
-                        st.json(poster["local_image_reference"])
+                        st.json(image_reference)
             else:
                 st.write("광고 콘텐츠 단계에서 `포스터 생성`을 누르면 SVG 포스터와 생성 프롬프트가 표시됩니다.")
                 st.caption("로컬 이미지 모델 (LOCAL_IMAGE_ENDPOINT) 이 설정되어 있으면 생성된 이미지가 포스터에 직접 합성됩니다.")
@@ -1214,18 +1305,40 @@ with result_col:
 
         st.divider()
 
-        ad_left, ad_right = st.columns([0.58, 0.42])
+        ad_left, ad_right = st.columns([0.66, 0.34])
         with ad_left:
             st.markdown("#### 광고 카드 미리보기")
-            st.write(f"**{st.session_state.product_name}**")
-            st.write(st.session_state.selling_point)
-            st.caption(f"{st.session_state.price} · {st.session_state.target_channel}")
+            result = st.session_state.copy_result or {}
+            headline = result.get("headline") or st.session_state.product_name
+            subcopy = result.get("subcopy") or st.session_state.selling_point
+            cta = result.get("cta") or "자세히 보기"
+            copies = result.get("copies") or []
+            bullet_html = "".join(f"<li>{html.escape(str(copy))}</li>" for copy in copies[:3])
+            if not bullet_html:
+                bullet_html = f"<li>{html.escape(st.session_state.selling_point)}</li>"
+            st.markdown(
+                f"""
+                <div class="ad-preview-card">
+                  <h3>{html.escape(str(headline))}</h3>
+                  <p class="subcopy">{html.escape(str(subcopy))}</p>
+                  <ul>{bullet_html}</ul>
+                  <div class="meta">{html.escape(str(st.session_state.price))} · {html.escape(str(st.session_state.target_channel))}</div>
+                  <span class="cta">{html.escape(str(cta))}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         with ad_right:
             st.markdown("#### 생성 문구")
             result = st.session_state.copy_result
             if result:
+                st.write(f"**{result.get('headline', '')}**")
+                if result.get("subcopy"):
+                    st.caption(result["subcopy"])
                 for copy in result.get("copies", [])[:3]:
                     st.write(f"- {copy}")
+                if result.get("cta"):
+                    st.write(f"CTA: `{result['cta']}`")
                 st.caption(" ".join(result.get("hashtags", [])))
                 if result.get("error"):
                     st.caption(f"fallback note: {result['error']}")

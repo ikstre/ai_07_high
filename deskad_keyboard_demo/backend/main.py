@@ -19,7 +19,7 @@ from .ai import (
     create_image_job,
     generate_ad_copy,
     generate_copy_experiment,
-    generate_local_image_reference,
+    generate_image_reference as generate_ai_image_reference,
     image_reference_from_job,
     poll_image_job,
     safe_image_reference,
@@ -453,12 +453,12 @@ def generate_image_reference(request: AdContentRequest):
     payload = request.model_dump()
     copy_result = generate_ad_copy(payload)
     image_prompt = build_image_prompt(payload, copy_result)
-    image_reference = generate_local_image_reference(payload, image_prompt)
+    image_reference = generate_ai_image_reference(payload, image_prompt)
     safe_reference = safe_image_reference(image_reference)
     return {
         "copy": copy_result,
         "image_prompt": image_prompt,
-        "local_image_reference": safe_reference,
+        "image_reference": safe_reference,
         "image_embedded": bool(isinstance(image_reference, dict) and image_reference.get("has_image")),
     }
 
@@ -527,7 +527,7 @@ def generate_poster(request: AdContentRequest):
     if request.image_job_id:
         image_reference = image_reference_from_job(request.image_job_id)
     if not (isinstance(image_reference, dict) and image_reference.get("has_image")):
-        image_reference = generate_local_image_reference(payload, image_prompt)
+        image_reference = generate_ai_image_reference(payload, image_prompt)
 
     image_b64 = None
     if isinstance(image_reference, dict) and image_reference.get("has_image"):
@@ -547,7 +547,6 @@ def generate_poster(request: AdContentRequest):
         "poster_url": f"{_settings_base_url()}/static/posters/{poster_meta['poster_file']}",
         "poster_file": poster_meta["poster_file"],
         "poster_template": payload.get("poster_template", "minimal_card"),
-        "local_image_reference": safe_reference,
         "image_reference": safe_reference,
         "image_job_id": request.image_job_id,
         "image_embedded": bool(image_b64),
