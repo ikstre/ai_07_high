@@ -34,6 +34,13 @@ class ImageQualityReport:
     has_watermark: bool | None = None
     ocr_text_excerpt: str = ""
     canny_edge_iou_vs_reference: float | None = None
+    # Heavy metrics — populated by the separate GPU quality worker
+    # (workers/quality_evaluator.py). None until that worker backfills them.
+    clip_score: float | None = None  # CLIP-I / CLIPScore vs image_prompt
+    fid_score: float | None = None
+    lpips_score: float | None = None
+    mos_score: float | None = None  # 점주 패널 5점 평균 (수기/외부 입력)
+    accepted: bool | None = None  # 교체 트리거 게이트 통과 여부
     notes: list[str] = field(default_factory=list)
     evaluator: str = "skeleton"
     evaluated_at: int = field(default_factory=lambda: int(time.time()))
@@ -219,10 +226,22 @@ def quality_report_for(job_id: str) -> dict | None:
 
 def quality_store_summary() -> dict:
     records = IMAGE_QUALITY_STORE.all()
+    values = list(records.values())
+
+    def _avg(key: str) -> float | None:
+        nums = [rec[key] for rec in values if isinstance(rec.get(key), (int, float))]
+        return round(sum(nums) / len(nums), 4) if nums else None
+
+    accepted = [rec.get("accepted") for rec in values]
     return {
         "store_path": str(IMAGE_QUALITY_STORE.path),
-        "count": len(records),
-        "evaluators": sorted({rec.get("evaluator", "unknown") for rec in records.values()}),
+        "count": len(values),
+        "evaluators": sorted({rec.get("evaluator", "unknown") for rec in values}),
+        "accepted": sum(1 for a in accepted if a is True),
+        "rejected": sum(1 for a in accepted if a is False),
+        "unscored": sum(1 for a in accepted if a is None),
+        "mean_mos_score": _avg("mos_score"),
+        "mean_clip_score": _avg("clip_score"),
     }
 
 
