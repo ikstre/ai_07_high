@@ -1104,7 +1104,7 @@ with left_col:
             st.session_state.price = st.text_input("판매가", st.session_state.price)
             st.session_state.target_channel = st.selectbox(
                 "판매 채널",
-                ["인스타그램", "스마트스토어", "상세페이지", "쿠팡 썸네일", "배너 광고"],
+                ["인스타그램", "스마트스토어", "상세페이지", "쿠팡 썸네일", "배너 광고", "네이버 검색광고", "카카오 채널", "유튜브 쇼츠"],
             )
             st.session_state.target_customer = st.text_input("타깃 고객", st.session_state.target_customer)
             st.session_state.selling_point = st.text_area("핵심 특징", st.session_state.selling_point, height=95)
