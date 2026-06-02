@@ -9,7 +9,6 @@ import shutil
 import struct
 import subprocess
 from pathlib import Path
-from uuid import uuid4
 
 from .config import get_settings
 from .renderer import build_uploaded_step_proxy_glb

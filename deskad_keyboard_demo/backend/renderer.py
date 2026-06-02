@@ -1,4 +1,3 @@
-import base64
 import json
 import math
 import struct
@@ -765,7 +764,6 @@ def _add_keyboard_detailed(
     mount_mat = builder.add_material("keyboard mount cue", "#d9e3ea", roughness=0.74, metallic=0.0, alpha=0.72, alpha_mode="BLEND")
     mount_dark_mat = builder.add_material("keyboard mount shadow", "#1f232a", roughness=0.68, metallic=0.0)
 
-    case_y_center = SURFACE_Y + case_outer_h / 2
     builder.add_box(
         "case bottom shell",
         (center_x, SURFACE_Y + case_bottom_h / 2, center_z),

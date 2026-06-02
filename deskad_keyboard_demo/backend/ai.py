@@ -784,7 +784,6 @@ def _promo_banner_svg(payload: dict, copy_result: dict, image_b64: str | None) -
     subcopy = html.escape(copy_result.get("subcopy") or "")
 
     pad = int(width * 0.05)
-    text_w = int(width * 0.45)
     hero_x = int(width * 0.50)
     hero_y = pad
     hero_w = width - hero_x - pad
