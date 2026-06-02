@@ -40,7 +40,50 @@ bash deskad_keyboard_demo/start.sh --restart   # 실행 중인 서버 재시작
 bash deskad_keyboard_demo/start.sh --stop      # 서버 종료
 ```
 
-### 3. 개별 실행
+### 3. 모델 워커(systemd, 선택)
+
+로컬 이미지 생성을 쓸 때는 ComfyUI를 systemd 서비스로 등록합니다. Ollama는 패키지 설치 시 생성되는 `ollama.service`를 사용하며, `start.sh`가 두 워커 상태를 점검합니다.
+
+```bash
+sudo install -m 0644 deskad_keyboard_demo/tools/systemd/comfyui.service /etc/systemd/system/comfyui.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now comfyui
+systemctl status comfyui --no-pager
+```
+
+로그 확인:
+
+```bash
+journalctl -u comfyui -f
+```
+
+### 3-1. HyperCLOVA X SEED 로컬 실행(Hugging Face, 선택)
+
+HyperCLOVA X SEED 공개 weight는 Hugging Face에서 받아 OpenAI-compatible 서버로 띄운 뒤 `hyperclova` provider에 연결할 수 있습니다. 모델 파일 접근에 동의가 필요한 gated repo이므로 Hugging Face에서 조건을 먼저 승인하고, 필요한 경우 `.env`에 `HF_TOKEN`을 넣습니다.
+
+이 VM은 L4 24GB GPU를 쓰며 ComfyUI가 켜져 있으면 VRAM을 함께 사용합니다. 광고 문구 생성에는 우선 `Text-Instruct-1.5B`를 권장하고, VRAM이 부족하면 `0.5B`로 낮춥니다.
+
+```bash
+cd deskad_keyboard_demo
+
+# .env 예시
+HYPERCLOVA_BASE_URL=http://127.0.0.1:11501/v1
+HYPERCLOVA_MODEL=naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B
+HYPERCLOVA_USE_DIRECT_API=false
+HF_TOKEN=<huggingface-token-if-required>
+
+# 모델은 첫 실행 시 Hugging Face cache로 다운로드됩니다.
+conda run -n sprint_high python tools/hyperclova_seed_openai_server.py
+```
+
+다른 터미널에서 확인:
+
+```bash
+curl -s http://127.0.0.1:11501/health
+curl -s http://127.0.0.1:8010/ai/providers
+```
+
+### 4. 개별 실행
 
 **백엔드 (FastAPI, 포트 8010)**
 
@@ -54,18 +97,22 @@ conda run -n sprint_high python -m uvicorn backend.main:app --host 127.0.0.1 --p
 ```bash
 cd deskad_keyboard_demo
 conda run -n sprint_high python -m streamlit run streamlit_app.py \
-  --server.port 8501 --server.address 0.0.0.0 --server.headless true
+  --server.port 8501 --server.address 127.0.0.1 --server.headless true \
+  --server.enableCORS false --server.enableXsrfProtection true
 ```
 
-### 4. 접속
+### 5. 접속
 
 ```
-http://<VM_IP>:8501
+https://<VM_IP>:8443
 ```
 
 > **포트 안내**  
-> - `8501` — Streamlit 프론트엔드, 외부 공개  
-> - `8010` — FastAPI 백엔드, 내부 전용 (Streamlit이 base64 인라인으로 GLB/SVG를 전달하므로 외부 노출 불필요)  
+> - `8443` — nginx + basic auth 외부 접속  
+> - `8501` — Streamlit 프론트엔드, loopback 전용  
+> - `8010` — FastAPI 백엔드, loopback 전용  
+> - `8188` — ComfyUI 이미지 워커, loopback 전용  
+> - `11434` — Ollama 로컬 LLM, loopback 전용  
 > - `8000` — JupyterHub 전용, **절대 사용 금지**
 
 ---

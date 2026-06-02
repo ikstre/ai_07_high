@@ -1,0 +1,140 @@
+{
+  "source": "Notion page: 리서치 자료실",
+  "source_page": "https://www.notion.so/1417356fc5cb82f98f62012a2647d44f",
+  "download_root": "/opt/shared_data/reference_drawings",
+  "references": [
+    {
+      "id": "vesa_mount_adapter_svg",
+      "label": "VESA Mount Adapter SVG",
+      "category": "deskterior_drawing",
+      "role": "ControlNet line reference, monitor-arm VESA proportions",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/9/9e/VESA_Mount_Adapter.svg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:VESA_Mount_Adapter.svg",
+      "license": "Wikimedia Commons, license must be checked on source page",
+      "local_path": "reference_drawings/vesa_mount_adapter.svg",
+      "storage": "shared_data"
+    },
+    {
+      "id": "vesa_mounts_size_e_svg",
+      "label": "VESA Mounts Size E SVG",
+      "category": "deskterior_drawing",
+      "role": "Monitor mount size reference",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/8/80/VESA_Mounts%2C_size_E.svg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:VESA_Mounts,_size_E.svg",
+      "license": "Wikimedia Commons, license must be checked on source page",
+      "local_path": "reference_drawings/vesa_mounts_size_e.svg",
+      "storage": "shared_data"
+    },
+    {
+      "id": "lcd_monitor_svg",
+      "label": "LCD Monitor SVG",
+      "category": "deskterior_drawing",
+      "role": "Monitor silhouette and line-art input",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/7/76/MonitorLCDlcd.svg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:MonitorLCDlcd.svg",
+      "license": "Wikimedia Commons, license must be checked on source page",
+      "local_path": "reference_drawings/lcd_monitor.svg",
+      "storage": "shared_data"
+    },
+    {
+      "id": "desk_top_view_jpg",
+      "label": "Desk Top View",
+      "category": "deskterior_photo",
+      "role": "Top-view deskterior composition reference",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/5/5c/Desk_view_of_top.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Desk_view_of_top.jpg",
+      "license": "Wikimedia Commons, license must be checked on source page",
+      "local_path": "reference_drawings/desk_top_view.jpg",
+      "storage": "shared_data"
+    },
+    {
+      "id": "overhead_workspace_jpg",
+      "label": "Overhead Desktop Workspace",
+      "category": "deskterior_photo",
+      "role": "Mouse, keyboard, notebook top-view reference",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/8/8a/Overhead_desktop_workspace_%28Unsplash%29.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Overhead_desktop_workspace_(Unsplash).jpg",
+      "license": "Wikimedia Commons, CC0 per Notion note; verify on source page",
+      "local_path": "reference_drawings/overhead_desktop_workspace.jpg",
+      "storage": "shared_data"
+    },
+    {
+      "id": "clean_desk_setup_jpg",
+      "label": "Clean Desk Setup",
+      "category": "deskterior_photo",
+      "role": "Photorealistic desk setup style reference",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cc/Desk_Setup_%28Unsplash%29.jpg/1280px-Desk_Setup_%28Unsplash%29.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Desk_Setup_(Unsplash).jpg",
+      "license": "Wikimedia Commons, CC0 per Notion note; verify on source page",
+      "local_path": "reference_drawings/clean_desk_setup.jpg",
+      "storage": "shared_data"
+    },
+    {
+      "id": "minimal_office_desk_jpg",
+      "label": "Minimalist Office Desk",
+      "category": "deskterior_photo",
+      "role": "Minimal desk tone and lighting reference",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ae/Minimalist_office_%28Unsplash%29.jpg/1280px-Minimalist_office_%28Unsplash%29.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Minimalist_office_(Unsplash).jpg",
+      "license": "Wikimedia Commons, CC0 per Notion note; verify on source page",
+      "local_path": "reference_drawings/minimalist_office_desk.jpg",
+      "storage": "shared_data"
+    },
+    {
+      "id": "tsuki_top_render_png",
+      "label": "Acheron Tsuki Top Render",
+      "category": "keyboard_reference",
+      "role": "60% keyboard top render reference",
+      "source_url": "https://github.com/Gondolindrim/Tsuki/raw/master/graphics/renders/top.png",
+      "page_url": "https://github.com/AcheronProject/Tsuki",
+      "license": "Acheron Open-Hardware License V1.4 per Notion note",
+      "local_path": "reference_drawings/tsuki_top_render.png",
+      "storage": "shared_data"
+    },
+    {
+      "id": "tsuki_kle_png",
+      "label": "Acheron Tsuki KLE Layout",
+      "category": "keyboard_drawing",
+      "role": "60% keyboard layout reference",
+      "source_url": "https://github.com/Gondolindrim/Tsuki/raw/master/graphics/KLE/tsukiKLE.png",
+      "page_url": "https://github.com/AcheronProject/Tsuki",
+      "license": "Acheron Open-Hardware License V1.4 per Notion note",
+      "local_path": "reference_drawings/tsuki_kle_layout.png",
+      "storage": "shared_data"
+    },
+    {
+      "id": "arcticpcb_top_render_png",
+      "label": "Acheron ArcticPCB Top Render",
+      "category": "keyboard_reference",
+      "role": "60% PCB render reference",
+      "source_url": "https://github.com/Gondolindrim/ArcticPCB/raw/master/graphics/renders/topRender.png",
+      "page_url": "https://github.com/AcheronProject/ArcticPCB",
+      "license": "Acheron Open-Hardware License V1.4 per Notion note",
+      "local_path": "reference_drawings/arcticpcb_top_render.png",
+      "storage": "shared_data"
+    },
+    {
+      "id": "arcticpcb_kle_png",
+      "label": "Acheron ArcticPCB KLE Layout",
+      "category": "keyboard_drawing",
+      "role": "Keyboard layout line reference",
+      "source_url": "https://github.com/Gondolindrim/ArcticPCB/raw/master/graphics/KLE/arcticKLE.png",
+      "page_url": "https://github.com/AcheronProject/ArcticPCB",
+      "license": "Acheron Open-Hardware License V1.4 per Notion note",
+      "local_path": "reference_drawings/arcticpcb_kle_layout.png",
+      "storage": "shared_data"
+    },
+    {
+      "id": "austin_kle_png",
+      "label": "Acheron Austin KLE Layout",
+      "category": "keyboard_drawing",
+      "role": "Keyboard layout line reference",
+      "source_url": "https://raw.githubusercontent.com/AcheronProject/Austin/master/resources/austin_kle.png",
+      "page_url": "https://github.com/AcheronProject/Austin",
+      "license": "Acheron Open-Hardware License V1.4 per Notion note",
+      "local_path": "reference_drawings/austin_kle_layout.png",
+      "storage": "shared_data"
+    }
+  ],
+  "storage": "shared_data"
+}
