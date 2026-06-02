@@ -36,11 +36,26 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _float_env(name: str, default: float) -> float:
+    """환경 변수 값을 실수로 읽고 실패하면 기본값을 반환한다."""
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 def _bool_env(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# ComfyUI 워크플로의 {negative_prompt} 자리에 들어갈 기본 부정 프롬프트.
+# COMFYUI_NEGATIVE_PROMPT 로 재정의 가능.
+DEFAULT_COMFYUI_NEGATIVE_PROMPT = (
+    "logo, watermark, distorted keyboard, extra keys, unreadable text, low quality"
+)
 
 
 @dataclass(frozen=True)
@@ -70,6 +85,13 @@ class Settings:
     image_model_backend: str = os.getenv("IMAGE_MODEL_BACKEND", "auto")
     comfyui_base_url: str = os.getenv("COMFYUI_BASE_URL", "")
     comfyui_workflow_path: str = os.getenv("COMFYUI_WORKFLOW_PATH", "")
+    comfyui_workflows_dir: str = os.getenv("COMFYUI_WORKFLOWS_DIR", "")
+    comfyui_default_workflow: str = os.getenv("COMFYUI_DEFAULT_WORKFLOW", "flux_schnell_basic")
+    comfyui_negative_prompt: str = os.getenv("COMFYUI_NEGATIVE_PROMPT", DEFAULT_COMFYUI_NEGATIVE_PROMPT)
+    comfyui_lora_name: str = os.getenv("COMFYUI_LORA_NAME", "")
+    comfyui_lora_strength: float = _float_env("COMFYUI_LORA_STRENGTH", 0.0)
+    comfyui_controlnet_image: str = os.getenv("COMFYUI_CONTROLNET_IMAGE", "")
+    comfyui_controlnet_strength: float = _float_env("COMFYUI_CONTROLNET_STRENGTH", 0.0)
     flux_model_variant: str = os.getenv("FLUX_MODEL_VARIANT", "")
     image_quantization: str = os.getenv("IMAGE_QUANTIZATION", "")
     enable_vae_tiling: bool = _bool_env("ENABLE_VAE_TILING", False)
@@ -170,6 +192,8 @@ def redacted_settings() -> dict:
         "image_model_backend": settings.image_model_backend,
         "comfyui_base_url": "set" if settings.comfyui_base_url else "missing",
         "comfyui_workflow_path": "set" if settings.comfyui_workflow_path else "missing",
+        "comfyui_workflows_dir": "set" if settings.comfyui_workflows_dir else "missing",
+        "comfyui_default_workflow": settings.comfyui_default_workflow or "unset",
         "flux_model_variant": settings.flux_model_variant or "unset",
         "image_quantization": settings.image_quantization or "unset",
         "enable_vae_tiling": settings.enable_vae_tiling,

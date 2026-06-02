@@ -182,6 +182,8 @@ def make_image_cache_key(
             "backend": payload.get("image_model_backend", ""),
             "flux_variant": os.getenv("FLUX_MODEL_VARIANT", ""),
             "quantization": os.getenv("IMAGE_QUANTIZATION", ""),
+            "negative_prompt": os.getenv("COMFYUI_NEGATIVE_PROMPT", ""),
+            "lora": os.getenv("COMFYUI_LORA_NAME", ""),
         },
         sort_keys=True,
     )

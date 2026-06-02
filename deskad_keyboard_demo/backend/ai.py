@@ -1061,28 +1061,85 @@ def _replace_workflow_placeholders(value, mapping: dict):
     return value
 
 
+_WORKFLOW_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _safe_workflow_name(value) -> str:
+    """Return a filesystem-safe workflow stem or "" (blocks path traversal)."""
+    if not value:
+        return ""
+    name = str(value).strip()
+    return name if _WORKFLOW_NAME_RE.match(name) else ""
+
+
+def _candidate_workflow_names(payload: dict) -> list[str]:
+    """Ordered workflow-name candidates: explicit > situational > default.
+
+    Drop a ``flux_<template>.json`` / ``flux_<theme>.json`` into
+    COMFYUI_WORKFLOWS_DIR to specialize a seller/situation with no code change;
+    selection falls back to COMFYUI_DEFAULT_WORKFLOW when none match.
+    """
+    settings = get_settings()
+    names: list[str] = []
+    explicit = _safe_workflow_name(payload.get("image_workflow"))
+    if explicit:
+        names.append(explicit)
+    for key in ("template", "theme"):
+        situ = _safe_workflow_name(payload.get(key))
+        if situ:
+            names.append(f"flux_{situ}")
+    names.append(_safe_workflow_name(settings.comfyui_default_workflow) or "flux_schnell_basic")
+    seen: set[str] = set()
+    return [n for n in names if not (n in seen or seen.add(n))]
+
+
+def _select_workflow_path(payload: dict) -> Path | None:
+    """Resolve the workflow file for a request.
+
+    Prefers a named workflow inside COMFYUI_WORKFLOWS_DIR (seller/situation
+    selector); falls back to the legacy single COMFYUI_WORKFLOW_PATH so existing
+    setups keep working.
+    """
+    settings = get_settings()
+    workflows_dir = _resolve_workflow_path(settings.comfyui_workflows_dir)
+    if workflows_dir and workflows_dir.is_dir():
+        for name in _candidate_workflow_names(payload):
+            candidate = workflows_dir / f"{name}.json"
+            if candidate.exists():
+                return candidate
+    return _resolve_workflow_path(settings.comfyui_workflow_path)
+
+
+def _workflow_placeholder_mapping(settings, image_prompt: str, width: int, height: int) -> dict:
+    """Build {key}/{{key}} → value map for workflow placeholder substitution."""
+    seed = int(time.time() * 1000) % 2147483647
+    values = {
+        "prompt": image_prompt,
+        "negative_prompt": settings.comfyui_negative_prompt,
+        "width": width,
+        "height": height,
+        "seed": seed,
+        "flux_model_variant": settings.flux_model_variant,
+        "image_quantization": settings.image_quantization,
+        "lora_name": settings.comfyui_lora_name,
+        "lora_strength": settings.comfyui_lora_strength,
+        "controlnet_image": settings.comfyui_controlnet_image,
+        "controlnet_strength": settings.comfyui_controlnet_strength,
+    }
+    mapping: dict = {}
+    for key, val in values.items():
+        mapping[f"{{{key}}}"] = val      # {key}
+        mapping[f"{{{{{key}}}}}"] = val   # {{key}}
+    return mapping
+
+
 def _load_comfyui_workflow(payload: dict, image_prompt: str) -> dict | None:
     settings = get_settings()
-    workflow_path = _resolve_workflow_path(settings.comfyui_workflow_path)
+    workflow_path = _select_workflow_path(payload)
     if not workflow_path or not workflow_path.exists():
         return None
     width, height = _image_dimensions(payload)
-    mapping = {
-        "{prompt}": image_prompt,
-        "{{prompt}}": image_prompt,
-        "{negative_prompt}": "logo, watermark, distorted keyboard, extra keys, unreadable text, low quality",
-        "{{negative_prompt}}": "logo, watermark, distorted keyboard, extra keys, unreadable text, low quality",
-        "{width}": width,
-        "{{width}}": width,
-        "{height}": height,
-        "{{height}}": height,
-        "{seed}": int(time.time() * 1000) % 2147483647,
-        "{{seed}}": int(time.time() * 1000) % 2147483647,
-        "{flux_model_variant}": settings.flux_model_variant,
-        "{{flux_model_variant}}": settings.flux_model_variant,
-        "{image_quantization}": settings.image_quantization,
-        "{{image_quantization}}": settings.image_quantization,
-    }
+    mapping = _workflow_placeholder_mapping(settings, image_prompt, width, height)
     workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
     return _replace_workflow_placeholders(workflow, mapping)
 
@@ -1161,7 +1218,7 @@ def _submit_comfyui_job(job: dict, payload: dict, image_prompt: str) -> dict:
             {
                 "provider": "comfyui",
                 "status": "draft",
-                "message": "COMFYUI_WORKFLOW_PATH is not configured or the workflow file is missing.",
+                "message": "No ComfyUI workflow found. Set COMFYUI_WORKFLOWS_DIR (+COMFYUI_DEFAULT_WORKFLOW) or COMFYUI_WORKFLOW_PATH; the selected workflow file is missing.",
             }
         )
         return job
@@ -1244,7 +1301,10 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
     settings = get_settings()
     width, height = _image_dimensions(payload)
 
-    cache_key = make_image_cache_key(image_prompt, payload, width, height, settings.comfyui_workflow_path)
+    selected_workflow = _select_workflow_path(payload)
+    cache_key = make_image_cache_key(
+        image_prompt, payload, width, height, str(selected_workflow) if selected_workflow else "",
+    )
     if not force_regen:
         cached_job = get_image_cache(cache_key)
         if cached_job is not None and cached_job.get("status") == "completed":
@@ -1291,7 +1351,7 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
         job.update(
             {
                 "status": "not_configured",
-                "message": "Set OPENAI_IMAGE_MODEL, LOCAL_IMAGE_ENDPOINT, or COMFYUI_BASE_URL/COMFYUI_WORKFLOW_PATH to enable image generation.",
+                "message": "Set OPENAI_IMAGE_MODEL, LOCAL_IMAGE_ENDPOINT, or COMFYUI_BASE_URL + (COMFYUI_WORKFLOWS_DIR or COMFYUI_WORKFLOW_PATH) to enable image generation.",
             }
         )
 

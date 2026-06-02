@@ -39,6 +39,7 @@
   - `_ad_context()` / `build_image_prompt()` 모든 사용자 값에 사전 적용
   - `_system_prompt()`에 명시적 보안 규칙: 시스템 프롬프트/환경 변수/API 키/토큰/내부 경로 노출 금지, "이전 지시 무시" 같은 우회 요청 거부, JSON 외 출력 금지
   - `_PROMPT_INJECTION_HINTS` (정규식, `re.IGNORECASE`): 영어/한국어 양쪽 jailbreak 표현을 탐지 — `ignore previous instructions`, `system prompt`, `reveal the system/api`, `act as developer/admin`, `jailbreak`, `disregard the rules` + 한국어 `이전 지시 무시` / `시스템 프롬프트 보여` / `개발자 모드` / `관리자 권한`. `_flag_prompt_injection()`이 사용자 입력에서 매칭되면 응답 메타에 플래그를 남겨 모니터링/후속 차단의 근거로 쓴다 (탐지·기록형, 시스템 프롬프트 방어가 1차 차단선).
+  - `_safe_workflow_name()`: 요청 필드 `image_workflow`(ComfyUI 워크플로 선택)을 `^[A-Za-z0-9_-]{1,64}$`로 검증 → `COMFYUI_WORKFLOWS_DIR` 밖으로의 경로 탈출(`../`) 차단. 불합격 시 기본 워크플로로 폴백.
 
 ### 2-3. CORS / 외부 노출
 
