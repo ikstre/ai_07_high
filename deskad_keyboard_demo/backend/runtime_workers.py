@@ -148,6 +148,13 @@ class _WorkerLock:
     def __enter__(self) -> "_WorkerLock":
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._fd = open(self._path, "w")  # noqa: SIM115
+        # Keep the lock file at 0600 like the other data/runtime state files
+        # (worker_state.json, cache/*.json) so the runtime dir has no
+        # group/other-readable outliers.
+        try:
+            os.fchmod(self._fd.fileno(), 0o600)
+        except OSError:
+            pass
         fcntl.flock(self._fd, fcntl.LOCK_EX)
         return self
 

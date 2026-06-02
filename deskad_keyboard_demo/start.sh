@@ -81,9 +81,10 @@ preflight() {
     fi
   fi
 
-  # 런타임 jsonl 권한 잠금 (메모리/디스크 누출 시 secret-인접 데이터가 새지 않게)
+  # 런타임 상태/캐시 파일 권한 잠금 (메모리/디스크 누출 시 secret-인접 데이터가 새지 않게)
+  # jsonl(잡/품질 로그) + json(worker_state, 결과 캐시) + lock(gpu_worker.lock) 전부 0600.
   if [[ -d "$SCRIPT_DIR/data/runtime" ]]; then
-    find "$SCRIPT_DIR/data/runtime" -type f -name '*.jsonl' -exec chmod 600 {} + 2>/dev/null || true
+    find "$SCRIPT_DIR/data/runtime" -type f -exec chmod 600 {} + 2>/dev/null || true
   fi
 
   # pre-commit hook 자동 설치 (이미 있으면 건드리지 않음)
