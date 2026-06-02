@@ -97,22 +97,31 @@ class ChatCompletionAdapter:
             return False
         return True
 
-    def request(self, *, system_prompt: str, user_prompt: str, timeout: int) -> str:
+    def request(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        timeout: int,
+        messages: list[dict] | None = None,
+        temperature: float | None = None,
+    ) -> str:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        messages = [
+        request_messages = messages or [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
         if self.prompt_format == "single_user":
-            messages = [{"role": "user", "content": f"{system_prompt}\n\n{user_prompt}"}]
+            flattened = "\n\n".join(str(message.get("content", "")) for message in request_messages if message.get("content"))
+            request_messages = [{"role": "user", "content": flattened}]
 
         body: dict = {
             "model": self.model or self.default_model,
-            "temperature": 0.7,
-            "messages": messages,
+            "temperature": 0.7 if temperature is None else temperature,
+            "messages": request_messages,
         }
         if self.json_response_format:
             body["response_format"] = {"type": "json_object"}
@@ -171,7 +180,15 @@ class HyperClovaDirectAdapter:
             return f"{base}/testapp/v1/chat-completions/{model}"
         return f"{base}/v1/chat-completions/{model}"
 
-    def request(self, *, system_prompt: str, user_prompt: str, timeout: int) -> str:
+    def request(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        timeout: int,
+        messages: list[dict] | None = None,
+        temperature: float | None = None,
+    ) -> str:
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
@@ -181,14 +198,14 @@ class HyperClovaDirectAdapter:
             headers["X-NCP-APIGW-API-KEY"] = self.apigw_key
 
         body = {
-            "messages": [
+            "messages": messages or [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             "maxTokens": self.max_tokens,
             "topP": self.top_p,
             "topK": 0,
-            "temperature": self.temperature,
+            "temperature": self.temperature if temperature is None else temperature,
             "repeatPenalty": self.repeat_penalty,
             "stopBefore": [],
             "includeAiFilters": True,

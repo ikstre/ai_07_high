@@ -5,13 +5,17 @@ from backend import llm_adapters
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, *, reason: str = "status"):
+    def __init__(self, status_code: int, *, reason: str = "status", body: dict | None = None):
         self.status_code = status_code
         self.reason = reason
+        self.body = body or {"choices": [{"message": {"content": "{}"}}]}
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
             raise requests.HTTPError(f"{self.status_code} {self.reason}", response=self)
+
+    def json(self) -> dict:
+        return self.body
 
 
 class FakeSession:
@@ -19,9 +23,11 @@ class FakeSession:
         self.outcomes = list(outcomes)
         self.calls = 0
         self.trust_env = True
+        self.requests = []
 
     def post(self, *args, **kwargs):
         self.calls += 1
+        self.requests.append({"args": args, "kwargs": kwargs})
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, BaseException):
             raise outcome
@@ -92,3 +98,27 @@ def test_post_with_retry_exhausts_connection_errors(monkeypatch):
         )
 
     assert session.calls == 3
+
+
+def test_chat_adapter_passes_custom_messages_and_temperature(monkeypatch):
+    session = _patch_session(monkeypatch, FakeSession([FakeResponse(200)]))
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "sample"},
+        {"role": "assistant", "content": "{}"},
+        {"role": "user", "content": "real"},
+    ]
+    adapter = llm_adapters.ChatCompletionAdapter(name="test", base_url="http://example.test", model="model")
+
+    content = adapter.request(
+        system_prompt="fallback system",
+        user_prompt="fallback user",
+        messages=messages,
+        temperature=0.45,
+        timeout=1,
+    )
+
+    body = session.requests[0]["kwargs"]["json"]
+    assert content == "{}"
+    assert body["messages"] == messages
+    assert body["temperature"] == 0.45
