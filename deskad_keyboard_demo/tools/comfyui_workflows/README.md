@@ -1,4 +1,4 @@
-# ComfyUI 워크플로 디렉터리
+1# ComfyUI 워크플로 디렉터리
 
 `COMFYUI_WORKFLOWS_DIR`(기본 `tools/comfyui_workflows`)에 **API 포맷** 워크플로 JSON을 모아 둔다.
 백엔드(`backend/ai.py`)가 요청마다 알맞은 워크플로를 골라 placeholder를 채운 뒤 ComfyUI `/prompt`로 제출한다.
@@ -39,7 +39,17 @@
 
 ## 포함된 워크플로
 
-- `flux_schnell_basic.json` — FLUX.1 schnell fp8 기본 텍스트→이미지 (UNETLoader + DualCLIP + KSampler 4 steps). 기본 워크플로.
+이미지 요청 payload에 실제로 실리는 situational 키는 `theme`(minimal/pastel/premium/gaming)뿐이라,
+아래 `flux_<theme>.json`이 코드 수정 없이 자동 라우팅된다. (`poster_template`은 SVG 합성 단계가 담당)
+
+- `flux_schnell_basic.json` — FLUX.1 schnell fp8 기본 텍스트→이미지 (UNETLoader + DualCLIP + KSampler 4 steps). 기본 워크플로이자 `theme=minimal` 및 매칭 없는 모든 요청의 폴백.
+- `flux_pastel.json` — `theme=pastel`. negative에 `harsh shadow / overexposed / dark mood` 보강(밝고 부드러운 톤 유도).
+- `flux_premium.json` — `theme=premium`. **hires 2-pass**: 1차 KSampler → `LatentUpscaleBy ×1.5` → 2차 KSampler(denoise 0.5)로 디테일/해상감↑. 배율 노드라 종횡비 유지. 추론 시간이 더 길다.
+- `flux_gaming.json` — `theme=gaming`. negative에 `washed out / flat lighting / low contrast` 보강(어둡고 또렷한 무드 유도).
+
+> theme별 "분위기"는 이미 `build_image_prompt`가 positive 프롬프트에 반영한다. schnell은 `cfg=1.0`이라
+> negative 차등 효과는 제한적이므로, pastel/gaming은 구조·미세조정용이고 실질 화질차는 premium의 hires가 담당한다.
+> `theme=minimal`은 별도 파일 없이 `flux_schnell_basic`으로 폴백한다(중복 회피).
 
 ## LoRA / ControlNet 추가 예시
 
