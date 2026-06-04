@@ -1334,7 +1334,7 @@ def _candidate_workflow_names(payload: dict) -> list[str]:
     explicit = _safe_workflow_name(payload.get("image_workflow"))
     if explicit:
         names.append(explicit)
-    for key in ("template", "theme"):
+    for key in ("template", "poster_template", "theme"):
         situ = _safe_workflow_name(payload.get(key))
         if situ:
             names.append(f"flux_{situ}")
@@ -1426,12 +1426,23 @@ def _download_comfyui_image_reference(job_id: str, image_url: str) -> dict:
     }
 
 
+# 중단·유실되어 queued/running 으로 굳은 좀비 job이 VRAM 해제를 영구 차단하지
+# 않도록, 생성 후 이 시간이 지난 non-terminal job은 더 이상 active로 치지 않는다.
+_COMFYUI_JOB_STALE_SECONDS = 600
+
+
 def _has_active_comfyui_jobs(exclude_job_id: str | None = None) -> bool:
+    now = int(time.time())
     for record in IMAGE_JOB_STORE.all().values():
         if exclude_job_id and record.get("job_id") == exclude_job_id:
             continue
-        if record.get("provider") == "comfyui" and record.get("status") not in COMFYUI_TERMINAL_STATUSES:
-            return True
+        if record.get("provider") != "comfyui":
+            continue
+        if record.get("status") in COMFYUI_TERMINAL_STATUSES:
+            continue
+        if now - int(record.get("created_at") or 0) > _COMFYUI_JOB_STALE_SECONDS:
+            continue  # stale 좀비 — 죽은 작업으로 간주, VRAM 해제를 막지 않음
+        return True
     return False
 
 

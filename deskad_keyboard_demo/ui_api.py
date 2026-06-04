@@ -36,6 +36,7 @@ PUBLIC_API_BASE = os.getenv("DESKAD_PUBLIC_API_BASE", API_BASE).rstrip("/")
 # 1:1 포스터 하단이 잘리지 않게 한다(성현 문서 "남은 확인 사항"). 결과 컬럼이
 # 더 넓어도 포스터는 이 폭으로 가운데 정렬되어 전체가 보인다.
 POSTER_PREVIEW_MAX_WIDTH = 820
+_SVG_NUMBER_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
 
 
 def api_get(path: str, timeout: int = 10) -> dict:
@@ -92,7 +93,11 @@ def reference_thumbnail_bytes(url: str) -> bytes:
 
 def svg_aspect_ratio(svg: str) -> float:
     """SVG의 height/width 비율. viewBox > width/height 속성 순, 기본 1.0(정사각)."""
-    match = re.search(r'viewBox=["\']\s*[\d.]+\s+[\d.]+\s+([\d.]+)\s+([\d.]+)', svg)
+    match = re.search(
+        rf'viewBox=["\']\s*{_SVG_NUMBER_PATTERN}[\s,]+{_SVG_NUMBER_PATTERN}[\s,]+'
+        rf'({_SVG_NUMBER_PATTERN})[\s,]+({_SVG_NUMBER_PATTERN})',
+        svg,
+    )
     if match:
         width, height = float(match.group(1)), float(match.group(2))
         if width > 0:

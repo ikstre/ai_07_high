@@ -22,6 +22,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -258,8 +259,41 @@ def _start_image_worker_locked() -> bool:
         return False
 
 
+def _comfyui_base_url() -> str:
+    """ComfyUI base (scheme://host:port) derived from the image health URL."""
+    parsed = urlparse(_image_health_url())
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return "http://127.0.0.1:8188"
+
+
+def _free_image_worker_vram() -> None:
+    """Unload models and free VRAM via ComfyUI's /free API.
+
+    Privilege-free, unlike ``systemctl stop`` (blocked by polkit for a non-root
+    user). This is what actually reclaims VRAM between exclusive text/image
+    turns; the systemctl stop below stays best-effort for setups that grant it.
+    """
+    if _image_service() != "comfyui":
+        return
+    try:
+        requests.post(
+            f"{_comfyui_base_url()}/free",
+            json={"unload_models": True, "free_memory": True},
+            timeout=10,
+        )
+        logger.info("ComfyUI /free: models unloaded, VRAM freed")
+    except Exception as exc:
+        logger.warning("ComfyUI /free failed: %s", exc)
+
+
 def _stop_image_worker_locked() -> None:
-    """Stop the image worker via systemctl. Caller must hold _WorkerLock."""
+    """Reclaim image-worker VRAM. Caller must hold _WorkerLock.
+
+    Frees VRAM via ComfyUI /free first (works without privilege), then attempts
+    systemctl stop as best-effort (ignored when polkit denies a non-root user).
+    """
+    _free_image_worker_vram()
     service = _image_service()
     logger.info("systemctl stop %s", service)
     try:
