@@ -35,10 +35,10 @@ def test_youtube_shorts_policy_limits_lengths_and_hashtags():
     )
 
     assert output["policy"]["channel"] == "유튜브 쇼츠"
-    assert output["policy"]["headline_max"] == 20
-    assert len(output["headline"]) <= 20
-    assert len(output["subcopy"]) <= 35
-    assert len(output["cta"]) <= 10
+    assert output["policy"]["headline_max"] == 24
+    assert len(output["headline"]) <= 24
+    assert len(output["subcopy"]) <= 52
+    assert len(output["cta"]) <= 12
     assert output["hashtags"] == ["#DeskSetup", "#키보드", "#커스텀키보드"]
 
 

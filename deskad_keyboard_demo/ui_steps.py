@@ -1,6 +1,7 @@
 """Step-specific Streamlit input panels for DeskAd AI Studio."""
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import streamlit as st
@@ -326,7 +327,8 @@ def _render_ad_content_step(ctx: dict[str, Any]) -> None:
             format_func=lambda k: poster_template_labels[k],
         )
         ctx["render_poster_template_thumbnails"](st.session_state.poster_template)
-        _render_ai_status(ctx["fetch_security_config"]())
+        if _operator_mode():
+            _render_ai_status(ctx["fetch_security_config"]())
     st.session_state.extra_request = st.text_area("추가 요청", st.session_state.extra_request, height=110)
 
     col_copy, col_image, col_poster = st.columns(3)
@@ -352,11 +354,18 @@ def _render_ad_content_step(ctx: dict[str, Any]) -> None:
     if poster_disabled:
         st.caption("이미지 작업이 완료되면 포스터 생성이 활성화됩니다.")
 
-    providers = ctx["fetch_ai_providers"]().get("providers", [])
-    if providers:
-        configured = [item["id"] for item in providers if item.get("configured") and item.get("id") != "fallback"]
-        st.caption(f"사용 가능 provider: {', '.join(configured) if configured else 'fallback only'}")
+    if _operator_mode():
+        providers = ctx["fetch_ai_providers"]().get("providers", [])
+        if providers:
+            configured = [item["id"] for item in providers if item.get("configured") and item.get("id") != "fallback"]
+            st.caption(f"사용 가능 provider: {', '.join(configured) if configured else 'fallback only'}")
     ctx["render_copy_experiment_picker"]()
+
+
+def _operator_mode() -> bool:
+    """운영자 진단 정보(AI provider 상태 등) 노출 여부. 기본 숨김 — 소비자 화면에는
+    어떤 모델/키가 켜져 있는지 등 기술 정보를 보이지 않는다. DESKAD_OPERATOR_MODE로만 노출."""
+    return os.getenv("DESKAD_OPERATOR_MODE", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _render_ai_status(config_now: dict) -> None:

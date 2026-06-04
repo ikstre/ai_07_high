@@ -51,18 +51,20 @@ GLOBAL_REPLACEMENTS = {
     "임상": "",
 }
 
+# subcopy_max는 포스터 가독성을 위해 상향(이전 30~55 → 46~72). 포스터 SVG가 2~3줄로
+# wrap하므로 과한 "…" 생략을 줄인다. headline/cta도 소폭 여유.
 CHANNEL_POLICY = {
-    "인스타그램": {"headline_max": 22, "subcopy_max": 42, "cta_max": 12, "hashtag_limit": 6},
-    "스마트스토어": {"headline_max": 24, "subcopy_max": 45, "cta_max": 12, "hashtag_limit": 4},
-    "상세페이지": {"headline_max": 28, "subcopy_max": 55, "cta_max": 14, "hashtag_limit": 3},
-    "쿠팡 썸네일": {"headline_max": 18, "subcopy_max": 32, "cta_max": 10, "hashtag_limit": 0},
-    "배너 광고": {"headline_max": 16, "subcopy_max": 30, "cta_max": 8, "hashtag_limit": 0},
-    "네이버 검색광고": {"headline_max": 15, "subcopy_max": 45, "cta_max": 8, "hashtag_limit": 0},
-    "카카오 채널": {"headline_max": 20, "subcopy_max": 40, "cta_max": 10, "hashtag_limit": 3},
-    "유튜브 쇼츠": {"headline_max": 20, "subcopy_max": 35, "cta_max": 10, "hashtag_limit": 3},
+    "인스타그램": {"headline_max": 26, "subcopy_max": 60, "cta_max": 14, "hashtag_limit": 6},
+    "스마트스토어": {"headline_max": 28, "subcopy_max": 64, "cta_max": 14, "hashtag_limit": 4},
+    "상세페이지": {"headline_max": 30, "subcopy_max": 72, "cta_max": 16, "hashtag_limit": 3},
+    "쿠팡 썸네일": {"headline_max": 22, "subcopy_max": 48, "cta_max": 12, "hashtag_limit": 0},
+    "배너 광고": {"headline_max": 20, "subcopy_max": 46, "cta_max": 10, "hashtag_limit": 0},
+    "네이버 검색광고": {"headline_max": 18, "subcopy_max": 60, "cta_max": 10, "hashtag_limit": 0},
+    "카카오 채널": {"headline_max": 24, "subcopy_max": 56, "cta_max": 12, "hashtag_limit": 3},
+    "유튜브 쇼츠": {"headline_max": 24, "subcopy_max": 52, "cta_max": 12, "hashtag_limit": 3},
 }
 
-DEFAULT_POLICY = {"headline_max": 22, "subcopy_max": 42, "cta_max": 12, "hashtag_limit": 5}
+DEFAULT_POLICY = {"headline_max": 26, "subcopy_max": 60, "cta_max": 14, "hashtag_limit": 5}
 
 # 공백 회피("국내1위", "최 고")까지 잡도록 키의 공백을 \s* 로 바꿔 사전 컴파일한다.
 _REPLACEMENT_PATTERNS = [

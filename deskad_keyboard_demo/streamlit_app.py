@@ -31,12 +31,13 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+      .stApp { background: #f6f8fc; }
       .block-container {
-        max-width: min(96vw, 1920px);
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        padding-left: 2rem;
-        padding-right: 2rem;
+        max-width: min(97vw, 2120px);
+        padding-top: 2.5rem;
+        padding-bottom: 2.5rem;
+        padding-left: 2.75rem;
+        padding-right: 2.75rem;
       }
 
       [data-testid="stSidebar"] {
@@ -178,10 +179,12 @@ st.markdown(
 
       .ad-preview-card {
         min-height: 220px;
-        padding: 28px 30px;
-        border: 1px solid rgba(148, 163, 184, 0.28);
-        border-radius: 10px;
-        background: linear-gradient(135deg, rgba(248, 250, 252, 0.05), rgba(148, 163, 184, 0.08));
+        padding: 30px 32px;
+        border: 1px solid #e8edf4;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #ffffff 0%, #dbeafe 160%);
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 6px 20px rgba(15, 23, 42, 0.06);
+        color: #1f2937;
       }
       .ad-preview-card h3 {
         margin: 0 0 14px 0;
@@ -193,7 +196,7 @@ st.markdown(
         margin: 0 0 18px 0;
         font-size: 17px;
         line-height: 1.65;
-        color: rgba(229, 231, 235, 0.86);
+        color: #475569;
       }
       .ad-preview-card ul {
         margin: 0 0 18px 20px;
@@ -204,18 +207,19 @@ st.markdown(
         line-height: 1.55;
       }
       .ad-preview-card .meta {
-        color: rgba(156, 163, 175, 0.92);
+        color: #64748b;
         font-size: 14px;
       }
       .ad-preview-card .cta {
         display: inline-block;
         margin-top: 16px;
-        padding: 9px 14px;
-        border-radius: 8px;
-        background: #2563eb;
+        padding: 10px 18px;
+        border-radius: 999px;
+        background: #3b82f6;
         color: #ffffff;
         font-weight: 700;
         font-size: 14px;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.30);
       }
       .reference-svg {
         border: 1px solid #e2e8f0;
@@ -233,6 +237,89 @@ st.markdown(
         max-height: 138px;
         height: auto;
         width: auto;
+      }
+
+      /* CTA 강조 (오늘의집 "구매" 자리 → 우리는 "광고 생성") */
+      .stButton > button[kind="primary"] {
+        border-radius: 999px;
+        font-weight: 700;
+        box-shadow: 0 4px 14px rgba(59, 130, 246, 0.32);
+      }
+      .stDownloadButton > button {
+        border-radius: 999px;
+        font-weight: 700;
+      }
+
+      /* 밝은 파스텔 카드 그림자 */
+      .step-progress { box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 6px 18px rgba(15, 23, 42, 0.05); }
+      .poster-thumb { box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04); }
+
+      /* 다크모드 적응형 — OS가 다크면 Streamlit 전체(사이드바/헤더/선택창)+카드를 어둡게 */
+      @media (prefers-color-scheme: dark) {
+        .stApp, [data-testid="stMain"], [data-testid="stAppViewContainer"] { background: #0e1117; }
+        [data-testid="stHeader"], [data-testid="stToolbar"] { background: rgba(14, 17, 23, 0.92); }
+        [data-testid="stSidebar"] { background: #161b26; border-right: 1px solid #2b3648; }
+        .stApp, .stMarkdown, [data-testid="stSidebar"], [data-testid="stWidgetLabel"],
+        label, h1, h2, h3, h4, h5, h6, p { color: #e6edf3; }
+        /* 입력/선택 위젯 */
+        [data-baseweb="select"] > div, [data-baseweb="input"],
+        .stTextInput input, .stTextArea textarea, .stNumberInput input,
+        [data-baseweb="base-input"] {
+          background: #1a2130 !important; color: #e6edf3 !important; border-color: #2b3648 !important;
+        }
+        [data-baseweb="popover"], [data-baseweb="menu"], [role="listbox"] {
+          background: #1a2130 !important; color: #e6edf3 !important;
+        }
+        [data-testid="stTabs"] button[role="tab"] { color: #cbd5e1; }
+        div[data-testid="stExpander"] details { background: #161b26; border-color: #2b3648; }
+        [data-testid="stForm"], div[data-testid="stVerticalBlockBorderWrapper"] { border-color: #2b3648; }
+        /* 커스텀 카드 */
+        .ad-preview-card {
+          background: linear-gradient(135deg, #1b2230 0%, #1e3a5f 170%);
+          border-color: #2b3648;
+          color: #e8edf4;
+        }
+        .ad-preview-card .subcopy { color: #cbd5e1; }
+        .ad-preview-card li { color: #dbe3ee; }
+        .ad-preview-card .meta { color: #94a3b8; }
+        .metric-chip { background: #161b26; color: #cbd5e1; border-color: #2b3648; }
+        .poster-thumb { background: #161b26; border-color: #2b3648; }
+        .poster-thumb .ptitle { color: #cbd5e1; }
+        .reference-svg { background: #161b26; border-color: #2b3648; }
+        .step-progress { background: #161b26; border-color: #2b3648; }
+        .step-chip.pending { background: #1e2530; color: #94a3b8; border-color: #2b3648; }
+        .section-label { color: #94a3b8 !important; }
+        /* 버튼(secondary/download/form) — primary 파랑은 유지 */
+        .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
+          background: #1a2130; color: #e6edf3; border-color: #2b3648;
+        }
+        .stButton > button[kind="primary"] {
+          background: #3b82f6 !important; color: #ffffff !important; border-color: #3b82f6 !important;
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover {
+          border-color: #3b82f6; color: #ffffff;
+        }
+        /* 드롭다운/셀렉트 펼침(커튼형 메뉴)과 옵션 */
+        ul[role="listbox"], [data-baseweb="menu"], [data-baseweb="popover"] > div {
+          background: #1a2130 !important;
+        }
+        ul[role="listbox"] li, li[role="option"], [data-baseweb="menu"] li {
+          background: #1a2130 !important; color: #e6edf3 !important;
+        }
+        li[role="option"]:hover, ul[role="listbox"] li:hover { background: #2b3648 !important; }
+        /* expander(접이식) 헤더/본문 */
+        [data-testid="stExpander"] summary { background: #161b26 !important; color: #e6edf3 !important; }
+        [data-testid="stExpander"] details { background: #161b26 !important; }
+        details summary, summary span, summary p { color: #e6edf3 !important; }
+        /* multiselect 태그 / radio·checkbox 라벨 */
+        span[data-baseweb="tag"] { background: #2b3648 !important; color: #e6edf3 !important; }
+        [data-testid="stWidgetLabel"] p, .stRadio label, .stCheckbox label { color: #cbd5e1 !important; }
+        /* 3D 셋업 등의 코드/JSON 블록 */
+        [data-testid="stJson"], [data-testid="stJson"] > div,
+        [data-testid="stCode"], [data-testid="stCodeBlock"], pre, code {
+          background: #161b26 !important;
+        }
+        [data-testid="stJson"] *, [data-testid="stCode"] *, pre, code { color: #e6edf3 !important; }
       }
     </style>
     """,
@@ -945,6 +1032,9 @@ def render_copy_experiment_picker() -> None:
     for index, item in enumerate(results):
         provider = item.get("provider", "unknown")
         label = provider_label(provider)
+        model_name = item.get("model") or item.get("runtime_name")
+        if model_name:
+            label += f" · {model_name}"
         status = item.get("status", "unknown")
         copy = item.get("copy") or {}
         with columns[index % len(columns)]:
@@ -1089,7 +1179,7 @@ STEP_UI_CONTEXT = {
     "render_copy_experiment_picker": render_copy_experiment_picker,
 }
 
-left_col, result_col = st.columns([0.72, 1.85], gap="large")
+left_col, result_col = st.columns([0.58, 2.05], gap="large")
 
 with left_col:
     st.markdown('<div class="section-label">INPUT PANEL / responsive</div>', unsafe_allow_html=True)
