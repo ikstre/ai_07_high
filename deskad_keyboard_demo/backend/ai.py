@@ -75,6 +75,59 @@ _THEME_MOOD_EN = {
     "gaming": "moody gaming setup, subtle RGB accent glow, dark immersive backdrop",
 }
 
+# 구도 템플릿 5종 (PART 7-M-2 카메라 앵글 + M-3 렌즈 매핑). 광고 타입별로 구도·렌즈를 변주한다.
+# 기존엔 'three-quarter hero angle + 85mm' 하나로 고정 → 85mm는 매크로용이라 hero엔 50mm가 맞음(미스매치 교정).
+_COMPOSITION_TEMPLATES = {
+    "hero": {
+        "angle": "hero shot, three-quarter view from slightly above",
+        "lens": "50mm f/4 lens, balanced depth of field",
+        "framing": "product fills 60-70% of frame, clean empty space on one side",
+        "scene": "desk",
+    },
+    "top_down": {
+        "angle": "top-down flat-lay, camera directly overhead",
+        "lens": "35mm f/5.6 lens, everything in sharp focus",
+        "framing": "symmetrical flat-lay layout, generous empty margins",
+        "scene": "desk",
+    },
+    "detail_macro": {
+        "angle": "extreme close-up macro of one or two keycaps and the switch",
+        "lens": "85mm f/2.8 macro lens, very shallow depth of field, strong background blur",
+        "framing": "fills the frame with keycap and switch detail, tight crop",
+        "scene": "macro",
+    },
+    "eye_level": {
+        "angle": "eye-level horizontal view at desk height, lifestyle in-use scene",
+        "lens": "35mm f/5.6 lens, deep focus across the desk",
+        "framing": "shows the desk environment and ambience, empty space along the top",
+        "scene": "desk",
+    },
+    "wide_scene": {
+        "angle": "wide environmental shot of the full desk setup in a room",
+        "lens": "24mm f/8 lens, the whole setup in focus",
+        "framing": "full deskterior scene with surrounding room space",
+        "scene": "room",
+    },
+}
+
+# 입력에 shot_type이 없을 때 채널별 기본 구도 (PART 7-M-2 '용도' 칼럼 기반)
+_DEFAULT_SHOT_BY_CHANNEL = {
+    "인스타그램": "top_down",
+    "스마트스토어": "hero",
+    "상세페이지": "hero",
+    "쿠팡": "hero",
+    "배너": "wide_scene",
+}
+
+# 색온도 (PART 7-M-4). 조명(_IMAGE_DIRECTION_BY_TONE)과 같은 소스(ad_tone)에서 파생해
+# "따뜻한 조명 + 차가운 색온도" 같은 모순을 원천 차단한다. 5500K가 광고용 기본값.
+_COLOR_TEMP_BY_TONE = {
+    "감성형": "warm 2700K white balance",
+    "프리미엄형": "neutral 4500K white balance",
+    "할인형": "bright 5500K daylight white balance",
+    "기능강조형": "neutral 5000K white balance",
+}
+
 _COLOR_ANCHORS_KO: tuple[tuple[tuple[int, int, int], str], ...] = (
     ((245, 234, 215), "크림 베이지"),
     ((244, 240, 230), "아이보리"),
@@ -285,9 +338,11 @@ def _system_prompt(payload: dict | None = None) -> str:
         "1. 구조: headline은 후킹(궁금증·공감·욕구 자극), subcopy는 핵심 베네핏(고객이 얻는 변화·느낌), "
         "cta는 행동 유도. 스펙 나열이 아니라 '이걸 사면 내 책상이 어떻게 달라지는가'를 말한다.\n"
         "2. 감각·장면 묘사를 적극 활용한다 (타건감, 공간 무드, 데스크 위 분위기). 밋밋한 평서문 금지.\n"
-        f"3. 광고 톤: '{tone}' — {tone_hint}\n"
-        f"4. 채널: '{channel}' — {channel_hint}\n"
-        "5. copies 4-5개는 서로 다른 각도(감성/기능/장면/구매유도)로 써서 골라 쓸 수 있게 한다.\n"
+        "3. 키보드·데스크테리어 도메인 어휘(타건감/키감, 윤활, 적축·갈축·청축, 키캡 프로파일, "
+        "풀배열·텐키리스·65% 배열, 가스켓 마운트 등)를 자연스럽게 녹이되, 비전문 고객도 이해하도록 과한 전문용어 나열은 피한다.\n"
+        f"4. 광고 톤: '{tone}' — {tone_hint}\n"
+        f"5. 채널: '{channel}' — {channel_hint}\n"
+        "6. copies 4-5개는 서로 다른 각도(감성/기능/장면/구매유도)로 써서 골라 쓸 수 있게 한다.\n"
         "\n"
         "[가드레일]\n"
         "- 수치·스펙은 입력으로 받은 사실만 사용하고, 없는 정보는 지어내지 않는다.\n"
@@ -819,33 +874,79 @@ def build_image_prompt(payload: dict, copy_result: dict) -> str:
     color_clause = ", ".join(color_parts)
     tone = sanitize_user_text(payload.get("ad_tone", "감성형"), limit=30)
     lighting = _IMAGE_DIRECTION_BY_TONE.get(tone, _IMAGE_DIRECTION_BY_TONE["감성형"])
+    # 색온도는 조명과 동일하게 ad_tone에서 파생 → 둘이 절대 충돌하지 않음
+    color_temp = _COLOR_TEMP_BY_TONE.get(tone, "standard 5500K daylight white balance")
     mood = _THEME_MOOD_EN.get(style, f"{style} styling")
     ratio = sanitize_user_text(payload.get("image_ratio", "1:1"), limit=10)
-    headline = sanitize_user_text(copy_result.get("headline", ""), limit=80)
     extra = sanitize_user_text(payload.get("extra_request", ""), limit=400)
 
+    # 구도 선택: 입력 shot_type 우선, 없으면 채널 기본값 (PART 7-M-2/M-3)
+    channel = sanitize_user_text(payload.get("target_channel", "인스타그램"), limit=30)
+    shot_type = sanitize_user_text(payload.get("shot_type", ""), limit=20)
+    if shot_type not in _COMPOSITION_TEMPLATES:
+        shot_type = _DEFAULT_SHOT_BY_CHANNEL.get(channel, "hero")
+    comp = _COMPOSITION_TEMPLATES[shot_type]
+
+    # 장면(scene)에 맞춰 [subject]·조명을 일관되게 구성 (구도-장면 모순 제거)
+    material = (
+        f"{case_finish} housing, {mount_type} construction, {plate} plate, "
+        f"{switch_family} family {switch} switches, {keycap_profile} profile satin PBT keycaps"
+    )
+    if comp["scene"] == "macro":
+        subject = (
+            f"[subject] macro detail of a {layout_label}: {keycap_profile} profile PBT keycaps with clean legends, "
+            f"{switch_family} family {switch} switch, {plate} plate edge and {case_finish} housing texture; "
+            "fill the frame with the keyboard detail — no full desk, monitor, or room in view. "
+        )
+        scene_light = "tight macro focus on the keycaps, fine surface texture, soft directional light"
+    elif comp["scene"] == "room":
+        subject = (
+            f"[subject] {layout_label} on a full deskterior setup with {assets}, {monitor_size}-inch monitor, "
+            f"{desk_w:.0f}x{desk_d:.0f}cm desk inside a tidy room; {material}. "
+        )
+        scene_light = "balanced ambient room light, realistic scale, the whole setup in focus, soft contact shadows"
+    else:  # desk
+        subject = (
+            f"[subject] {layout_label}; measured deskterior setup with {assets}, "
+            f"{monitor_size}-inch monitor, {desk_w:.0f}x{desk_d:.0f}cm desk, clean cable-managed composition. "
+            f"Keyboard material details: {material} with subtle legends and natural shadows. "
+        )
+        scene_light = ("sharp focus on the keyboard, real desk surface, woven deskmat, "
+                       "monitor glass reflections, realistic scale, soft contact shadows")
+
+    has_reference = bool(payload.get("reference_asset_path"))
+
     parts = [
-        f"Premium Korean e-commerce advertising key visual, hero product shot of {product}. ",
-        f"[subject] {layout_label}; measured deskterior setup with {assets}, "
-        f"{monitor_size}-inch monitor, {desk_w:.0f}x{desk_d:.0f}cm desk, clean cable-managed composition. "
-        f"Keyboard material details: {case_finish} housing with bevels and side seams, {mount_type} construction cues, "
-        f"{plate} plate visible between keycaps, {switch_family} family {switch} switches, "
-        f"{keycap_profile} profile satin PBT keycaps with subtle legends and natural shadows. ",
-        f"[composition] {mood}, three-quarter hero angle, rule-of-thirds, "
-        "clean negative space reserved for a Korean headline and CTA, magazine-quality marketing layout. ",
-        f"[lighting & camera] {lighting}; 85mm product lens, shallow depth of field, "
-        "sharp focus on the keyboard, realistic PBR materials, real desk surface, woven deskmat, "
-        "monitor glass reflections, realistic scale, soft contact shadows. ",
+        f"Premium Korean e-commerce advertising key visual of {product}; {comp['angle']}. ",
+        subject,
+        # 키보드는 디퓨전 모델이 가장 틀리기 쉬운 피사체 → 정확도 가드 (왜곡 방지는 [negative]가 담당, 여기선 양성 신호만)
+        "[keyboard fidelity] anatomically correct mechanical keyboard, exact key count for the layout, "
+        "evenly aligned keycaps in straight rows, crisp readable keycap legends, accurate proportions. ",
+        # 구도(angle)는 오프닝 문장에 이미 명시 → 여기선 무드·프레이밍만 (중복 제거)
+        f"[composition] {mood}, rule-of-thirds, {comp['framing']}, magazine-quality marketing layout. ",
+        f"[lighting & camera] {lighting}, {color_temp}; {comp['lens']}, {scene_light}, "
+        "realistic PBR materials, photorealistic commercial render. ",
         f"[format] composed for {ratio} aspect ratio. ",
-        "[negative] no brand logos, no copyrighted imagery, no watermark, no distorted keys, no unreadable text. ",
-        f"[reference] {reference}. ",
+        # 헤드라인은 이후 포스터(SVG) 레이어에서 덧입힘 → 이미지엔 광고 텍스트를 굽지 않는다 (깨진 글자 방지)
+        "[text policy] do not render any marketing text, captions, watermark, or logos in the image "
+        "(product keycap legends are fine); keep clean empty negative space for a Korean headline and CTA to be overlaid later. ",
+        # 도메인 특화 네거티브: 키보드 생성의 대표 실패모드(녹은/뜬 키캡, 행 뒤틀림, 키보드 중복 등) 차단
+        "[negative] no brand logos, no copyrighted imagery, no watermark, no distorted or melted keycaps, "
+        "no floating keys, no warped or crooked rows, no duplicate or second keyboard, no extra fingers or hands, "
+        "no gibberish or unreadable text. ",
     ]
+    if has_reference:
+        # 실제 3D 렌더가 있으면 그 구성 그대로 맞춰 '설정한 제품과 일치하는 광고' 보장 (서비스 핵심 약속)
+        parts.append(
+            f"[reference adherence] follow the provided 3D reference ({reference}); "
+            "match its layout, key count, colours and proportions exactly. "
+        )
+    else:
+        parts.append(f"[reference] {reference}. ")
     if color_clause:
         parts.append(f"[color palette] {color_clause}. ")
     if extra:
         parts.append(f"[art direction] {extra}. ")
-    if headline:
-        parts.append(f"[headline space] leave room for the headline: {headline}")
     return "".join(parts).strip()
 
 
