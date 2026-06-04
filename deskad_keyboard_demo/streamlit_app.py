@@ -9,6 +9,7 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
+from ppt_export import build_poster_pptx
 from ui_api import (
     api_get,
     api_post,
@@ -878,6 +879,62 @@ def selected_copy_payload(copy_result: dict | None) -> dict | None:
     return selected
 
 
+def _copy_editor_signature(copy_result: dict | None) -> tuple[str, str, str, str]:
+    if not isinstance(copy_result, dict):
+        return ("", "", "", "")
+    return (
+        str(copy_result.get("provider") or st.session_state.get("copy_selected_provider") or ""),
+        str(copy_result.get("headline") or ""),
+        str(copy_result.get("subcopy") or ""),
+        str(copy_result.get("cta") or ""),
+    )
+
+
+def sync_copy_editor_state(copy_result: dict | None) -> None:
+    signature = _copy_editor_signature(copy_result)
+    if st.session_state.get("copy_editor_signature") == signature:
+        return
+    st.session_state.copy_editor_signature = signature
+    st.session_state.copy_editor_headline = signature[1]
+    st.session_state.copy_editor_subcopy = signature[2]
+    st.session_state.copy_editor_cta = signature[3]
+
+
+def apply_copy_editor_changes() -> None:
+    result = dict(st.session_state.copy_result or {})
+    result["provider"] = result.get("provider") or st.session_state.get("copy_selected_provider") or "edited"
+    result["headline"] = str(st.session_state.get("copy_editor_headline") or "").strip()
+    result["subcopy"] = str(st.session_state.get("copy_editor_subcopy") or "").strip()
+    result["cta"] = str(st.session_state.get("copy_editor_cta") or "").strip()
+    selected = selected_copy_payload(result)
+    st.session_state.copy_result = selected or result
+    st.session_state.copy_selected_provider = st.session_state.copy_result.get("provider")
+    st.session_state.copy_editor_signature = _copy_editor_signature(st.session_state.copy_result)
+
+
+def render_copy_inline_editor(copy_result: dict | None) -> None:
+    if not copy_result:
+        return
+    sync_copy_editor_state(copy_result)
+    with st.form("copy_inline_editor", border=True):
+        st.text_input("헤드라인", key="copy_editor_headline", max_chars=80)
+        st.text_area("서브카피", key="copy_editor_subcopy", height=88, max_chars=160)
+        st.text_input("CTA", key="copy_editor_cta", max_chars=40)
+        submitted = st.form_submit_button("문구 업데이트", use_container_width=True)
+    if submitted:
+        apply_copy_editor_changes()
+        st.rerun()
+
+
+def current_product_export_payload() -> dict:
+    return {
+        "product_name": st.session_state.product_name,
+        "price": st.session_state.price,
+        "target_channel": st.session_state.target_channel,
+        "selling_point": st.session_state.selling_point,
+    }
+
+
 def render_desk_setup() -> None:
     data = api_post("/render/desk-setup", build_render_payload(), timeout=30)
     st.session_state.model_url = data["model_url"]
@@ -1276,6 +1333,22 @@ with result_col:
                     mime="image/svg+xml",
                     use_container_width=True,
                 )
+                try:
+                    pptx_data = build_poster_pptx(
+                        poster_svg=poster_svg,
+                        copy_result=st.session_state.copy_result or poster.get("copy") or {},
+                        poster=poster,
+                        product=current_product_export_payload(),
+                    )
+                    st.download_button(
+                        "⬇ 포스터 다운로드 (PPTX)",
+                        data=pptx_data,
+                        file_name=f"deskad_poster_{poster.get('poster_template', 'minimal_card')}.pptx",
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        use_container_width=True,
+                    )
+                except Exception as exc:
+                    st.caption(f"PPT 생성 실패: {exc}")
                 with st.expander("이미지 생성 프롬프트", expanded=False):
                     st.write(poster["image_prompt"])
                 if image_reference:
@@ -1355,14 +1428,9 @@ with result_col:
             result = st.session_state.copy_result
             if result:
                 st.caption(f"선택 provider: {provider_label(st.session_state.get('copy_selected_provider') or result.get('provider'))}")
-                if result.get("headline"):
-                    st.write(f"**{result['headline']}**")
-                if result.get("subcopy"):
-                    st.caption(result["subcopy"])
+                render_copy_inline_editor(result)
                 for copy in result.get("copies", [])[:3]:
                     st.write(f"- {copy}")
-                if result.get("cta"):
-                    st.write(f"CTA: `{result['cta']}`")
                 st.caption(" ".join(result.get("hashtags", [])))
                 if result.get("error"):
                     st.caption(f"fallback note: {result['error']}")

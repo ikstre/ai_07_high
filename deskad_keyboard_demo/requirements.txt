@@ -3,3 +3,4 @@ uvicorn==0.35.0
 streamlit==1.57.0
 requests==2.33.1
 python-dotenv==1.2.2
+python-pptx==1.0.2
