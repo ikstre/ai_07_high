@@ -975,6 +975,54 @@ def _safe_inline_image(image_b64: str | None) -> str:
     return image_b64.strip()
 
 
+def _estimate_svg_text_width(text: str, font_size: int) -> int:
+    units = 0.0
+    for char in html.unescape(str(text or "")):
+        if char.isspace():
+            units += 0.35
+        elif ord(char) > 127:
+            units += 0.95
+        else:
+            units += 0.58
+    return int(units * font_size)
+
+
+def _fit_svg_text(text: str, *, font_size: int, max_width: int) -> str:
+    label = html.unescape(str(text or "")).strip()
+    if _estimate_svg_text_width(label, font_size) <= max_width:
+        return label
+    while len(label) > 1 and _estimate_svg_text_width(label + "…", font_size) > max_width:
+        label = label[:-1].rstrip()
+    return (label + "…") if label else ""
+
+
+def _cta_button_svg(
+    *,
+    x: int,
+    y: int,
+    cta: str,
+    fill: str,
+    text_fill: str,
+    max_width: int,
+    min_width: int,
+    height: int = 62,
+    font_size: int = 24,
+    anchor: str = "left",
+) -> str:
+    horizontal_pad = int(height * 0.48)
+    label = _fit_svg_text(cta, font_size=font_size, max_width=max_width - horizontal_pad * 2)
+    text_width = _estimate_svg_text_width(label, font_size)
+    button_width = max(min_width, min(max_width, text_width + horizontal_pad * 2))
+    button_x = x - button_width if anchor == "right" else x
+    text_x = button_x + button_width // 2
+    text_y = y + int(height * 0.64)
+    return (
+        f'<rect x="{button_x}" y="{y}" width="{button_width}" height="{height}" rx="{height // 2}" fill="{fill}"/>'
+        f'<text x="{text_x}" y="{text_y}" font-size="{font_size}" font-weight="800" '
+        f'fill="{text_fill}" text-anchor="middle">{html.escape(label)}</text>'
+    )
+
+
 def _hero_image_svg(payload: dict, image_b64: str | None, x: int, y: int, w: int, h: int, accent: str, ink: str) -> str:
     if image_b64:
         clip_id = f"hero_{x}_{y}_{w}_{h}"
@@ -1031,6 +1079,17 @@ def _minimal_card_svg(payload: dict, copy_result: dict, image_b64: str | None) -
     hero_w = int(width * 0.74)
     hero_h = int(height * 0.36)
     hero_svg = _hero_image_svg(payload, image_b64, hero_x, hero_y, hero_w, hero_h, wood, ink)
+    cta_svg = _cta_button_svg(
+        x=int(width * 0.08),
+        y=int(height * 0.89),
+        cta=cta,
+        fill=accent,
+        text_fill=bg,
+        max_width=int(width * 0.44),
+        min_width=int(width * 0.22),
+        height=62,
+        font_size=24,
+    )
 
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect width="{width}" height="{height}" fill="{bg}"/>
@@ -1039,8 +1098,7 @@ def _minimal_card_svg(payload: dict, copy_result: dict, image_b64: str | None) -
   {subcopy_svg}
   <text x="{int(width*0.08)}" y="{int(height*0.82)}" font-size="31" font-weight="700" fill="{ink}">{product}</text>
   <text x="{int(width*0.08)}" y="{int(height*0.86)}" font-size="25" fill="{ink}" opacity="0.72">{price}</text>
-  <rect x="{int(width*0.08)}" y="{int(height*0.89)}" width="{int(width*0.25)}" height="62" rx="31" fill="{accent}"/>
-  <text x="{int(width*0.105)}" y="{int(height*0.89)+40}" font-size="24" font-weight="800" fill="{bg}">{cta}</text>
+  {cta_svg}
 </svg>'''
 
 
@@ -1095,6 +1153,7 @@ def _feature_focus_svg(payload: dict, copy_result: dict, image_b64: str | None) 
     bg, ink, accent, wood = PALETTES.get(theme, PALETTES["minimal"])
     product = html.escape(payload.get("product_name", "DeskAd Setup"))
     headline = html.escape(copy_result.get("headline") or product)
+    cta = html.escape(copy_result.get("cta") or "자세히 보기")
     spec_bullets = copy_result.get("spec_bullets") or [
         payload.get("product_type", "커스텀 키보드"),
         payload.get("selling_point", ""),
@@ -1118,19 +1177,32 @@ def _feature_focus_svg(payload: dict, copy_result: dict, image_b64: str | None) 
     )
     bullets_svg = ""
     for i, bullet in enumerate(spec_bullets):
-        line_y = spec_y + 40 + i * 60
+        line_y = spec_y + 70 + i * 58
         bullets_svg += (
             f'<circle cx="{spec_x + 10}" cy="{line_y - 8}" r="6" fill="{accent}"/>'
             f'<text x="{spec_x + 28}" y="{line_y}" font-size="22" fill="{ink}">{html.escape(bullet)}</text>'
         )
+    cta_svg = _cta_button_svg(
+        x=width - pad,
+        y=int(height * 0.875),
+        cta=cta,
+        fill=accent,
+        text_fill=bg,
+        max_width=int(width * 0.34),
+        min_width=int(width * 0.20),
+        height=58,
+        font_size=22,
+        anchor="right",
+    )
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect width="{width}" height="{height}" fill="{bg}"/>
   {headline_svg}
   {_hero_image_svg(payload, image_b64, hero_x, hero_y, hero_w, hero_h, wood, ink)}
   <rect x="{spec_x - 8}" y="{spec_y - 8}" width="{spec_w + 16}" height="{hero_h + 16}" rx="20" fill="{accent}" opacity="0.10"/>
-  <text x="{spec_x}" y="{spec_y + 4}" font-size="20" font-weight="700" fill="{accent}">SPECS</text>
+  <text x="{spec_x}" y="{spec_y + 26}" font-size="20" font-weight="800" fill="{ink}" opacity="0.6">SPECS</text>
   {bullets_svg}
   <text x="{pad}" y="{int(height*0.92)}" font-size="26" font-weight="700" fill="{ink}">{product}</text>
+  {cta_svg}
 </svg>'''
 
 
