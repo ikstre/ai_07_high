@@ -1,4 +1,4 @@
-1# ComfyUI 워크플로 디렉터리
+# ComfyUI 워크플로 디렉터리
 
 `COMFYUI_WORKFLOWS_DIR`(기본 `tools/comfyui_workflows`)에 **API 포맷** 워크플로 JSON을 모아 둔다.
 백엔드(`backend/ai.py`)가 요청마다 알맞은 워크플로를 골라 placeholder를 채운 뒤 ComfyUI `/prompt`로 제출한다.
@@ -39,8 +39,9 @@
 
 ## 포함된 워크플로
 
-이미지 요청 payload에 실제로 실리는 situational 키는 `theme`(minimal/pastel/premium/gaming)뿐이라,
-아래 `flux_<theme>.json`이 코드 수정 없이 자동 라우팅된다. (`poster_template`은 SVG 합성 단계가 담당)
+이미지 요청 payload에 실제로 실리는 situational 키는 `poster_template`과
+`theme`(minimal/pastel/premium/gaming)이다. 템플릿 전용 워크플로가 있으면
+`flux_<poster_template>.json`이 먼저 선택되고, 없으면 아래 `flux_<theme>.json`으로 자동 라우팅된다.
 
 - `flux_schnell_basic.json` — FLUX.1 schnell fp8 기본 텍스트→이미지 (UNETLoader + DualCLIP + KSampler 4 steps). 기본 워크플로이자 `theme=minimal` 및 매칭 없는 모든 요청의 폴백.
 - `flux_pastel.json` — `theme=pastel`. negative에 `harsh shadow / overexposed / dark mood` 보강(밝고 부드러운 톤 유도).

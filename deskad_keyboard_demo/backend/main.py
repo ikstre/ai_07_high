@@ -134,6 +134,7 @@ class AdContentRequest(DeskSetupRenderRequest):
     model_url: str | None = Field(default=None, max_length=400)
     reference_asset_path: str | None = Field(default=None, max_length=400)
     image_job_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
+    image_workflow: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
     poster_template: str = Field(default="minimal_card", pattern=r"^(minimal_card|grid_three|feature_focus|promo_banner)$")
     selected_copy: SelectedCopy | None = None
 

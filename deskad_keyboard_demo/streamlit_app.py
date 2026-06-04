@@ -18,6 +18,7 @@ from ui_api import (
     reference_thumbnail_bytes,
     responsive_svg_document,
 )
+from ui_steps import render_step_input_panel
 
 
 st.set_page_config(
@@ -30,12 +31,13 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+      .stApp { background: #f6f8fc; }
       .block-container {
-        max-width: min(96vw, 1920px);
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        padding-left: 2rem;
-        padding-right: 2rem;
+        max-width: min(97vw, 2120px);
+        padding-top: 2.5rem;
+        padding-bottom: 2.5rem;
+        padding-left: 2.75rem;
+        padding-right: 2.75rem;
       }
 
       [data-testid="stSidebar"] {
@@ -177,10 +179,12 @@ st.markdown(
 
       .ad-preview-card {
         min-height: 220px;
-        padding: 28px 30px;
-        border: 1px solid rgba(148, 163, 184, 0.28);
-        border-radius: 10px;
-        background: linear-gradient(135deg, rgba(248, 250, 252, 0.05), rgba(148, 163, 184, 0.08));
+        padding: 30px 32px;
+        border: 1px solid #e8edf4;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #ffffff 0%, #dbeafe 160%);
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 6px 20px rgba(15, 23, 42, 0.06);
+        color: #1f2937;
       }
       .ad-preview-card h3 {
         margin: 0 0 14px 0;
@@ -192,7 +196,7 @@ st.markdown(
         margin: 0 0 18px 0;
         font-size: 17px;
         line-height: 1.65;
-        color: rgba(229, 231, 235, 0.86);
+        color: #475569;
       }
       .ad-preview-card ul {
         margin: 0 0 18px 20px;
@@ -203,18 +207,19 @@ st.markdown(
         line-height: 1.55;
       }
       .ad-preview-card .meta {
-        color: rgba(156, 163, 175, 0.92);
+        color: #64748b;
         font-size: 14px;
       }
       .ad-preview-card .cta {
         display: inline-block;
         margin-top: 16px;
-        padding: 9px 14px;
-        border-radius: 8px;
-        background: #2563eb;
+        padding: 10px 18px;
+        border-radius: 999px;
+        background: #3b82f6;
         color: #ffffff;
         font-weight: 700;
         font-size: 14px;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.30);
       }
       .reference-svg {
         border: 1px solid #e2e8f0;
@@ -232,6 +237,89 @@ st.markdown(
         max-height: 138px;
         height: auto;
         width: auto;
+      }
+
+      /* CTA 강조 (오늘의집 "구매" 자리 → 우리는 "광고 생성") */
+      .stButton > button[kind="primary"] {
+        border-radius: 999px;
+        font-weight: 700;
+        box-shadow: 0 4px 14px rgba(59, 130, 246, 0.32);
+      }
+      .stDownloadButton > button {
+        border-radius: 999px;
+        font-weight: 700;
+      }
+
+      /* 밝은 파스텔 카드 그림자 */
+      .step-progress { box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 6px 18px rgba(15, 23, 42, 0.05); }
+      .poster-thumb { box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04); }
+
+      /* 다크모드 적응형 — OS가 다크면 Streamlit 전체(사이드바/헤더/선택창)+카드를 어둡게 */
+      @media (prefers-color-scheme: dark) {
+        .stApp, [data-testid="stMain"], [data-testid="stAppViewContainer"] { background: #0e1117; }
+        [data-testid="stHeader"], [data-testid="stToolbar"] { background: rgba(14, 17, 23, 0.92); }
+        [data-testid="stSidebar"] { background: #161b26; border-right: 1px solid #2b3648; }
+        .stApp, .stMarkdown, [data-testid="stSidebar"], [data-testid="stWidgetLabel"],
+        label, h1, h2, h3, h4, h5, h6, p { color: #e6edf3; }
+        /* 입력/선택 위젯 */
+        [data-baseweb="select"] > div, [data-baseweb="input"],
+        .stTextInput input, .stTextArea textarea, .stNumberInput input,
+        [data-baseweb="base-input"] {
+          background: #1a2130 !important; color: #e6edf3 !important; border-color: #2b3648 !important;
+        }
+        [data-baseweb="popover"], [data-baseweb="menu"], [role="listbox"] {
+          background: #1a2130 !important; color: #e6edf3 !important;
+        }
+        [data-testid="stTabs"] button[role="tab"] { color: #cbd5e1; }
+        div[data-testid="stExpander"] details { background: #161b26; border-color: #2b3648; }
+        [data-testid="stForm"], div[data-testid="stVerticalBlockBorderWrapper"] { border-color: #2b3648; }
+        /* 커스텀 카드 */
+        .ad-preview-card {
+          background: linear-gradient(135deg, #1b2230 0%, #1e3a5f 170%);
+          border-color: #2b3648;
+          color: #e8edf4;
+        }
+        .ad-preview-card .subcopy { color: #cbd5e1; }
+        .ad-preview-card li { color: #dbe3ee; }
+        .ad-preview-card .meta { color: #94a3b8; }
+        .metric-chip { background: #161b26; color: #cbd5e1; border-color: #2b3648; }
+        .poster-thumb { background: #161b26; border-color: #2b3648; }
+        .poster-thumb .ptitle { color: #cbd5e1; }
+        .reference-svg { background: #161b26; border-color: #2b3648; }
+        .step-progress { background: #161b26; border-color: #2b3648; }
+        .step-chip.pending { background: #1e2530; color: #94a3b8; border-color: #2b3648; }
+        .section-label { color: #94a3b8 !important; }
+        /* 버튼(secondary/download/form) — primary 파랑은 유지 */
+        .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
+          background: #1a2130; color: #e6edf3; border-color: #2b3648;
+        }
+        .stButton > button[kind="primary"] {
+          background: #3b82f6 !important; color: #ffffff !important; border-color: #3b82f6 !important;
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover {
+          border-color: #3b82f6; color: #ffffff;
+        }
+        /* 드롭다운/셀렉트 펼침(커튼형 메뉴)과 옵션 */
+        ul[role="listbox"], [data-baseweb="menu"], [data-baseweb="popover"] > div {
+          background: #1a2130 !important;
+        }
+        ul[role="listbox"] li, li[role="option"], [data-baseweb="menu"] li {
+          background: #1a2130 !important; color: #e6edf3 !important;
+        }
+        li[role="option"]:hover, ul[role="listbox"] li:hover { background: #2b3648 !important; }
+        /* expander(접이식) 헤더/본문 */
+        [data-testid="stExpander"] summary { background: #161b26 !important; color: #e6edf3 !important; }
+        [data-testid="stExpander"] details { background: #161b26 !important; }
+        details summary, summary span, summary p { color: #e6edf3 !important; }
+        /* multiselect 태그 / radio·checkbox 라벨 */
+        span[data-baseweb="tag"] { background: #2b3648 !important; color: #e6edf3 !important; }
+        [data-testid="stWidgetLabel"] p, .stRadio label, .stCheckbox label { color: #cbd5e1 !important; }
+        /* 3D 셋업 등의 코드/JSON 블록 */
+        [data-testid="stJson"], [data-testid="stJson"] > div,
+        [data-testid="stCode"], [data-testid="stCodeBlock"], pre, code {
+          background: #161b26 !important;
+        }
+        [data-testid="stJson"] *, [data-testid="stCode"] *, pre, code { color: #e6edf3 !important; }
       }
     </style>
     """,
@@ -944,6 +1032,9 @@ def render_copy_experiment_picker() -> None:
     for index, item in enumerate(results):
         provider = item.get("provider", "unknown")
         label = provider_label(provider)
+        model_name = item.get("model") or item.get("runtime_name")
+        if model_name:
+            label += f" · {model_name}"
         status = item.get("status", "unknown")
         copy = item.get("copy") or {}
         with columns[index % len(columns)]:
@@ -1056,315 +1147,44 @@ with st.sidebar:
 
 render_step_progress()
 
-left_col, result_col = st.columns([0.72, 1.85], gap="large")
+STEP_UI_CONTEXT = {
+    "CASE_FINISH_LABELS": CASE_FINISH_LABELS,
+    "PLATE_MATERIAL_LABELS": PLATE_MATERIAL_LABELS,
+    "PCB_COLOR_LABELS": PCB_COLOR_LABELS,
+    "SWITCH_STEM_LABELS": SWITCH_STEM_LABELS,
+    "SWITCH_FAMILY_LABELS": SWITCH_FAMILY_LABELS,
+    "KEYCAP_PROFILE_LABELS": KEYCAP_PROFILE_LABELS,
+    "MOUNT_TYPE_LABELS": MOUNT_TYPE_LABELS,
+    "MONITOR_ARM_LABELS": MONITOR_ARM_LABELS,
+    "POSTER_TEMPLATE_LABELS": POSTER_TEMPLATE_LABELS,
+    "MONITOR_SIZES": MONITOR_SIZES,
+    "KEYBOARD_SIZE_INFO": KEYBOARD_SIZE_INFO,
+    "KEYBOARD_MODEL_DEFAULTS": KEYBOARD_MODEL_DEFAULTS,
+    "sync_layout_from_model": sync_layout_from_model,
+    "fetch_layout_ids": fetch_layout_ids,
+    "upload_reference_model": upload_reference_model,
+    "fetch_reference_assets": fetch_reference_assets,
+    "render_reference_grid": render_reference_grid,
+    "fetch_model_library": fetch_model_library,
+    "prepare_library_model": prepare_library_model,
+    "fetch_desk_assets": fetch_desk_assets,
+    "render_desk_setup": render_desk_setup,
+    "render_poster_template_thumbnails": render_poster_template_thumbnails,
+    "fetch_security_config": fetch_security_config,
+    "generate_copy_experiment": generate_copy_experiment,
+    "generate_image_job": generate_image_job,
+    "poster_waiting_for_image": poster_waiting_for_image,
+    "generate_poster": generate_poster,
+    "fetch_ai_providers": fetch_ai_providers,
+    "render_copy_experiment_picker": render_copy_experiment_picker,
+}
+
+left_col, result_col = st.columns([0.58, 2.05], gap="large")
 
 with left_col:
     st.markdown('<div class="section-label">INPUT PANEL / responsive</div>', unsafe_allow_html=True)
     with st.container(border=True, height=500):
-        if st.session_state.step == 1:
-            st.markdown("#### 상품 정보")
-            st.session_state.product_type = st.selectbox(
-                "상품 유형",
-                ["커스텀 키보드", "키캡", "데스크매트", "데스크 조명", "모니터암", "데스크 소품", "번들 셋업"],
-                index=["커스텀 키보드", "키캡", "데스크매트", "데스크 조명", "모니터암", "데스크 소품", "번들 셋업"].index(st.session_state.product_type)
-                if st.session_state.product_type in ["커스텀 키보드", "키캡", "데스크매트", "데스크 조명", "모니터암", "데스크 소품", "번들 셋업"]
-                else 0,
-            )
-            st.session_state.product_name = st.text_input("상품명", st.session_state.product_name)
-            st.session_state.price = st.text_input("판매가", st.session_state.price)
-            st.session_state.target_channel = st.selectbox(
-                "판매 채널",
-                ["인스타그램", "스마트스토어", "상세페이지", "쿠팡 썸네일", "배너 광고", "네이버 검색광고", "카카오 채널", "유튜브 쇼츠"],
-            )
-            st.session_state.target_customer = st.text_input("타깃 고객", st.session_state.target_customer)
-            st.session_state.selling_point = st.text_area("핵심 특징", st.session_state.selling_point, height=95)
-
-        elif st.session_state.step == 2:
-            st.markdown("#### 도면/제품 데이터")
-            st.session_state.product_library = st.selectbox(
-                "제품 라이브러리",
-                ["keyboard_layout 샘플", "QMK/VIA 샘플", "사용자 업로드"],
-                index=["keyboard_layout 샘플", "QMK/VIA 샘플", "사용자 업로드"].index(st.session_state.product_library),
-            )
-            st.selectbox(
-                "키보드 모델",
-                list(KEYBOARD_MODEL_DEFAULTS.keys()),
-                key="keyboard_model",
-                on_change=sync_layout_from_model,
-            )
-            layout_options = fetch_layout_ids()
-            st.session_state.layout = st.selectbox(
-                "배열",
-                layout_options,
-                index=layout_options.index(st.session_state.layout) if st.session_state.layout in layout_options else min(1, len(layout_options) - 1),
-                format_func=lambda k: KEYBOARD_SIZE_INFO.get(k, k + "%"),
-            )
-            st.session_state.drawing_upload_mode = st.radio(
-                "도면 입력 방식",
-                ["샘플 JSON 사용", "STEP/GLB 파일 업로드"],
-                horizontal=True,
-                index=["샘플 JSON 사용", "STEP/GLB 파일 업로드"].index(st.session_state.drawing_upload_mode)
-                if st.session_state.drawing_upload_mode in ["샘플 JSON 사용", "STEP/GLB 파일 업로드"]
-                else 0,
-            )
-            if st.session_state.drawing_upload_mode == "STEP/GLB 파일 업로드":
-                uploaded = st.file_uploader("STEP/STP/GLB 업로드", type=["step", "stp", "glb"])
-                if uploaded and st.button("업로드 모델 미리보기", type="primary", use_container_width=True):
-                    try:
-                        upload_reference_model(uploaded)
-                        st.success("업로드 모델 준비 완료")
-                    except Exception as exc:
-                        st.error(f"업로드 처리 실패: {exc}")
-
-            with st.expander("공용 모델/도면 라이브러리", expanded=True):
-                references = fetch_reference_assets()
-                downloaded_refs = [item for item in references if item.get("downloaded")]
-                st.caption(f"노션 리서치 기반 레퍼런스 {len(references)}개 · 다운로드 완료 {len(downloaded_refs)}개")
-                if downloaded_refs:
-                    render_reference_grid(downloaded_refs)
-                    ref_options = {item["path"]: item for item in downloaded_refs if item.get("path")}
-                    if st.session_state.selected_reference_path not in ref_options:
-                        st.session_state.selected_reference_path = next(iter(ref_options), None)
-                    selected_ref = st.selectbox(
-                        "다운로드된 도면/레퍼런스",
-                        options=list(ref_options.keys()),
-                        key="selected_reference_path",
-                        format_func=lambda value: f"{ref_options[value].get('label', value)} · {ref_options[value].get('license', 'license check')}",
-                    )
-                    ref_item = ref_options.get(selected_ref, {})
-                    st.caption(f"출처: {ref_item.get('source_url', '')}")
-                else:
-                    st.caption("아직 다운로드된 노션 레퍼런스가 없습니다. 다운로드 스크립트 실행 후 표시됩니다.")
-
-                library = fetch_model_library()
-                shared_status = library.get("shared", {})
-                st.caption(
-                    f"공용 데이터: {shared_status.get('shared_data_dir', '/opt/shared_data')} "
-                    f"({'있음' if shared_status.get('shared_data_exists') else '없음'}) · "
-                    f"공용 모델: {shared_status.get('shared_model_dir', '/opt/shared_model')} "
-                    f"({'있음' if shared_status.get('shared_model_exists') else '없음'})"
-                )
-                compatible = {".glb", ".step", ".stp"}
-                files = [item for item in library.get("files", []) if item.get("extension") in compatible]
-                if files:
-                    file_options = {item["path"]: item for item in files}
-                    if st.session_state.library_model_path not in file_options:
-                        st.session_state.library_model_path = next(iter(file_options), None)
-                    selected_file = st.selectbox(
-                        "FastAPI 미리보기 모델",
-                        options=list(file_options.keys()),
-                        key="library_model_path",
-                        format_func=lambda value: f"{file_options[value].get('name', value)} · {file_options[value].get('kind', 'file')}",
-                    )
-                    if st.button("공용 모델 미리보기", use_container_width=True):
-                        try:
-                            prepare_library_model(selected_file)
-                            st.success("공용 모델 준비 완료")
-                        except Exception as exc:
-                            st.error(f"공용 모델 처리 실패: {exc}")
-                else:
-                    st.caption("/opt/shared_model 또는 static/models에 GLB/STEP/STP 파일을 넣으면 여기서 바로 FastAPI 미리보기에 연결됩니다.")
-            model_info = KEYBOARD_MODEL_DEFAULTS[st.session_state.keyboard_model]
-            st.info(f"기본값: {st.session_state.keyboard_model} / {model_info['layout']} 배열\n\n{model_info['description']}")
-
-            with st.expander("키보드 상세 커스텀 (케이스/보강판/PCB/스위치)", expanded=True):
-                custom_a, custom_b = st.columns(2)
-                with custom_a:
-                    st.session_state.case_finish = st.selectbox(
-                        "케이스 마감",
-                        list(CASE_FINISH_LABELS.keys()),
-                        index=list(CASE_FINISH_LABELS.keys()).index(st.session_state.case_finish),
-                        format_func=lambda k: CASE_FINISH_LABELS[k],
-                    )
-                    st.session_state.plate_material = st.selectbox(
-                        "보강판(plate) 재질",
-                        list(PLATE_MATERIAL_LABELS.keys()),
-                        index=list(PLATE_MATERIAL_LABELS.keys()).index(st.session_state.plate_material),
-                        format_func=lambda k: PLATE_MATERIAL_LABELS[k],
-                    )
-                with custom_b:
-                    st.session_state.pcb_color = st.selectbox(
-                        "PCB 색상",
-                        list(PCB_COLOR_LABELS.keys()),
-                        index=list(PCB_COLOR_LABELS.keys()).index(st.session_state.pcb_color),
-                        format_func=lambda k: PCB_COLOR_LABELS[k],
-                    )
-                    st.session_state.switch_stem = st.selectbox(
-                        "스위치 stem",
-                        list(SWITCH_STEM_LABELS.keys()),
-                        index=list(SWITCH_STEM_LABELS.keys()).index(st.session_state.switch_stem),
-                        format_func=lambda k: SWITCH_STEM_LABELS[k],
-                    )
-                detail_a, detail_b, detail_c = st.columns(3)
-                with detail_a:
-                    st.session_state.switch_family = st.selectbox(
-                        "스위치 구조",
-                        list(SWITCH_FAMILY_LABELS.keys()),
-                        index=list(SWITCH_FAMILY_LABELS.keys()).index(st.session_state.switch_family),
-                        format_func=lambda k: SWITCH_FAMILY_LABELS[k],
-                    )
-                with detail_b:
-                    st.session_state.keycap_profile = st.selectbox(
-                        "키캡 프로파일",
-                        list(KEYCAP_PROFILE_LABELS.keys()),
-                        index=list(KEYCAP_PROFILE_LABELS.keys()).index(st.session_state.keycap_profile),
-                        format_func=lambda k: KEYCAP_PROFILE_LABELS[k],
-                    )
-                with detail_c:
-                    st.session_state.mount_type = st.selectbox(
-                        "마운트 방식",
-                        list(MOUNT_TYPE_LABELS.keys()),
-                        index=list(MOUNT_TYPE_LABELS.keys()).index(st.session_state.mount_type),
-                        format_func=lambda k: MOUNT_TYPE_LABELS[k],
-                    )
-                st.session_state.show_internals = st.checkbox(
-                    "내부 구조(보강판/PCB/스위치) 렌더 노출",
-                    value=st.session_state.show_internals,
-                    help="체크하면 키보드 측면에서 내부 적층 구조가 보이도록 두께를 살짝 분리합니다. 포스터 컷에서 분해도처럼 보이게 할 때 유용합니다.",
-                )
-
-            st.markdown("##### 데스크테리어 항목")
-            assets = fetch_desk_assets()
-            asset_labels = {asset["id"]: f"{asset['label']} · {asset.get('category', 'asset')}" for asset in assets}
-            categories: dict[str, list[str]] = {}
-            for asset in assets:
-                categories.setdefault(asset.get("category", "etc"), []).append(asset["id"])
-            asset_caption = " / ".join(f"{cat}({len(items)})" for cat, items in sorted(categories.items()))
-            st.caption(f"전체 {len(assets)}개 에셋 · {asset_caption}")
-            st.session_state.asset_selection = st.multiselect(
-                "렌더링에 포함할 판매/연출 물품",
-                options=[asset["id"] for asset in assets],
-                default=[item for item in st.session_state.asset_selection if item in asset_labels],
-                format_func=lambda item: asset_labels.get(item, item),
-            )
-
-        elif st.session_state.step == 3:
-            st.markdown("#### 가상 셋업")
-            st.session_state.theme = st.selectbox(
-                "광고 스타일",
-                ["minimal", "pastel", "premium", "gaming"],
-                index=["minimal", "pastel", "premium", "gaming"].index(st.session_state.theme),
-            )
-            desk_presets = {
-                "120 x 60 cm": (120.0, 60.0),
-                "120 x 80 cm": (120.0, 80.0),
-                "140 x 70 cm": (140.0, 70.0),
-                "160 x 80 cm": (160.0, 80.0),
-                "180 x 80 cm": (180.0, 80.0),
-                "직접 입력": (float(st.session_state.desk_width), float(st.session_state.desk_depth)),
-            }
-            previous_preset = st.session_state.get("desk_preset", "120 x 60 cm")
-            st.session_state.desk_preset = st.selectbox(
-                "책상 크기 프리셋",
-                list(desk_presets.keys()),
-                index=list(desk_presets.keys()).index(previous_preset) if previous_preset in desk_presets else 0,
-            )
-            if st.session_state.desk_preset != "직접 입력" and st.session_state.desk_preset != previous_preset:
-                st.session_state.desk_width, st.session_state.desk_depth = desk_presets[st.session_state.desk_preset]
-
-            dim_a, dim_b = st.columns(2)
-            with dim_a:
-                st.session_state.desk_width = st.slider("책상 폭(cm)", 100.0, 200.0, float(st.session_state.desk_width), 5.0)
-            with dim_b:
-                st.session_state.desk_depth = st.slider("책상 깊이(cm)", 50.0, 90.0, float(st.session_state.desk_depth), 5.0)
-
-            mon_a, mon_b = st.columns(2)
-            with mon_a:
-                st.session_state.monitor_size = st.selectbox(
-                    "모니터 크기",
-                    options=list(MONITOR_SIZES.keys()),
-                    index=list(MONITOR_SIZES.keys()).index(st.session_state.monitor_size),
-                    format_func=lambda k: MONITOR_SIZES[k],
-                )
-                st.session_state.monitor_arm_style = st.selectbox(
-                    "모니터암 스타일",
-                    options=list(MONITOR_ARM_LABELS.keys()),
-                    index=list(MONITOR_ARM_LABELS.keys()).index(st.session_state.monitor_arm_style),
-                    format_func=lambda k: MONITOR_ARM_LABELS[k],
-                )
-            with mon_b:
-                kb_layout = st.session_state.layout
-                st.caption(f"키보드: {KEYBOARD_SIZE_INFO.get(kb_layout, kb_layout + '% 배열')}")
-                st.caption("렌더 단위: 1 GLB unit = 1 cm  |  1u = 1.905 cm")
-                st.caption(f"케이스: {CASE_FINISH_LABELS[st.session_state.case_finish]}")
-                st.caption(f"보강판: {PLATE_MATERIAL_LABELS[st.session_state.plate_material]}")
-                st.caption(f"스위치: {SWITCH_STEM_LABELS[st.session_state.switch_stem]} · {SWITCH_FAMILY_LABELS[st.session_state.switch_family]}")
-                st.caption(f"키캡: {KEYCAP_PROFILE_LABELS[st.session_state.keycap_profile]}")
-                st.caption(f"마운트: {MOUNT_TYPE_LABELS[st.session_state.mount_type]}")
-            color_a, color_b = st.columns(2)
-            with color_a:
-                st.session_state.case_color = st.color_picker("하우징", st.session_state.case_color)
-                st.session_state.keycap_color = st.color_picker("키캡", st.session_state.keycap_color)
-                st.session_state.accent_keycap_color = st.color_picker("포인트 키", st.session_state.accent_keycap_color)
-            with color_b:
-                st.session_state.deskmat_color = st.color_picker("데스크매트", st.session_state.deskmat_color)
-                st.session_state.desk_color = st.color_picker("책상", st.session_state.desk_color)
-                st.session_state.mouse_color = st.color_picker("마우스", st.session_state.mouse_color)
-
-            if st.button("3D 데스크 셋업 생성", type="primary", use_container_width=True):
-                try:
-                    render_desk_setup()
-                    st.success("3D GLB 생성 완료")
-                except Exception as exc:
-                    st.error(f"렌더링 실패: {exc}")
-
-        else:
-            st.markdown("#### 광고 콘텐츠")
-            ad_a, ad_b = st.columns(2)
-            with ad_a:
-                st.session_state.ad_tone = st.selectbox("광고 톤", ["프리미엄형", "감성형", "할인형", "기능강조형"])
-                st.session_state.image_ratio = st.selectbox("이미지 비율", ["1:1", "4:5", "16:9"])
-            with ad_b:
-                st.session_state.poster_template = st.selectbox(
-                    "포스터 템플릿",
-                    options=list(POSTER_TEMPLATE_LABELS.keys()),
-                    index=list(POSTER_TEMPLATE_LABELS.keys()).index(st.session_state.poster_template),
-                    format_func=lambda k: POSTER_TEMPLATE_LABELS[k],
-                )
-                render_poster_template_thumbnails(st.session_state.poster_template)
-                config_now = fetch_security_config()
-                local_llm_status = "on" if config_now.get("local_llm_base_url") == "set" else "off"
-                hyperclova_status = "on" if config_now.get("hyperclova_base_url") == "set" else "off"
-                kanana_status = "on" if config_now.get("kanana_base_url") == "set" else "off"
-                midm_status = "on" if config_now.get("midm_base_url") == "set" else "off"
-                openai_status = "on" if config_now.get("openai_api_key") == "set" else "off"
-                local_img_status = "on" if config_now.get("local_image_endpoint") == "set" else "off"
-                comfyui_status = "on" if config_now.get("comfyui_base_url") == "set" else "off"
-                st.caption(
-                    f"AI: OpenAI {openai_status} · Local {local_llm_status} · HyperCLOVA {hyperclova_status} · "
-                    f"Kanana {kanana_status} · Mi:dm {midm_status}"
-                )
-                st.caption(f"Image {config_now.get('image_model_backend', 'auto')} / local {local_img_status} / ComfyUI {comfyui_status}")
-            st.session_state.extra_request = st.text_area("추가 요청", st.session_state.extra_request, height=110)
-
-            col_copy, col_image, col_poster = st.columns(3)
-            if col_copy.button("광고 문구 생성", type="secondary", use_container_width=True):
-                try:
-                    generate_copy_experiment()
-                    st.success("광고 문구 후보 생성 완료")
-                except Exception as exc:
-                    st.error(f"문구 생성 실패: {exc}")
-            if col_image.button("실사 이미지 작업", type="secondary", use_container_width=True):
-                try:
-                    generate_image_job()
-                    st.success("이미지 작업 생성 완료")
-                except Exception as exc:
-                    st.error(f"이미지 작업 실패: {exc}")
-            poster_disabled = poster_waiting_for_image()
-            if col_poster.button("포스터 생성", type="primary", use_container_width=True, disabled=poster_disabled):
-                try:
-                    generate_poster()
-                    st.success("포스터 생성 완료")
-                except Exception as exc:
-                    st.error(f"포스터 생성 실패: {exc}")
-            if poster_disabled:
-                st.caption("이미지 작업이 완료되면 포스터 생성이 활성화됩니다.")
-
-            providers = fetch_ai_providers().get("providers", [])
-            if providers:
-                configured = [item["id"] for item in providers if item.get("configured") and item.get("id") != "fallback"]
-                st.caption(f"사용 가능 provider: {', '.join(configured) if configured else 'fallback only'}")
-            render_copy_experiment_picker()
+        render_step_input_panel(STEP_UI_CONTEXT)
 
     nav_a, nav_b = st.columns(2)
     nav_a.button(
@@ -1448,6 +1268,13 @@ with result_col:
                     responsive_svg_document(poster_svg),
                     height=poster_preview_height(poster_svg),
                     scrolling=False,
+                )
+                st.download_button(
+                    "⬇ 포스터 다운로드 (SVG · 이미지 합성 포함)",
+                    data=poster_svg,
+                    file_name=f"deskad_poster_{poster.get('poster_template', 'minimal_card')}.svg",
+                    mime="image/svg+xml",
+                    use_container_width=True,
                 )
                 with st.expander("이미지 생성 프롬프트", expanded=False):
                     st.write(poster["image_prompt"])

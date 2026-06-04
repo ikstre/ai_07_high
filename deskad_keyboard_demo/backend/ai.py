@@ -668,7 +668,7 @@ def generate_copy_experiment(payload: dict, providers: list[str] | None = None, 
     for provider in selected:
         provider_id = _normalize_text_provider(provider)
         if provider_id == "fallback":
-            results.append({"provider": provider_id, "status": "ok", "copy": generate_ad_copy(payload, provider_override="fallback")})
+            results.append({"provider": provider_id, "status": "ok", "runtime_name": "rule_based", "model": "규칙 기반 (AI 미사용)", "copy": generate_ad_copy(payload, provider_override="fallback")})
             continue
         adapter = _copy_adapter(provider_id)
         if not adapter.available:
@@ -688,7 +688,7 @@ def generate_copy_experiment(payload: dict, providers: list[str] | None = None, 
             cache_key = make_text_cache_key(payload, provider_id, adapter.model or adapter.default_model)
             cached = get_text_cache(cache_key)
             if cached is not None:
-                results.append({"provider": provider_id, "status": "ok", "copy": apply_copy_policy(payload, cached), "cache_hit": True})
+                results.append({"provider": provider_id, "status": "ok", "runtime_name": adapter.name, "model": adapter.model or adapter.default_model, "copy": apply_copy_policy(payload, cached), "cache_hit": True})
                 continue
 
         ensure_text_worker(start_managed_worker=_uses_managed_text_worker(adapter))
@@ -696,7 +696,7 @@ def generate_copy_experiment(payload: dict, providers: list[str] | None = None, 
             result = apply_copy_policy(payload, _chat_copy(payload, adapter))
             cache_key = make_text_cache_key(payload, provider_id, adapter.model or adapter.default_model)
             put_text_cache(cache_key, result)
-            results.append({"provider": provider_id, "status": "ok", "copy": result})
+            results.append({"provider": provider_id, "status": "ok", "runtime_name": adapter.name, "model": adapter.model or adapter.default_model, "copy": result})
         except Exception as exc:
             results.append({"provider": provider_id, "status": "error", "error": str(exc)})
 
@@ -876,9 +876,15 @@ def _safe_inline_image(image_b64: str | None) -> str:
 
 def _hero_image_svg(payload: dict, image_b64: str | None, x: int, y: int, w: int, h: int, accent: str, ink: str) -> str:
     if image_b64:
+        clip_id = f"hero_{x}_{y}_{w}_{h}"
+        # 배경 rect로 박스를 채우고 이미지는 meet(전체 표시)로 얹어 상하/좌우 잘림을 없앤다.
+        # 둥근 모서리 클립으로 카드 느낌 유지. (이전 slice는 비율이 다른 이미지를 잘라냈음)
         return (
+            f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="24" fill="{accent}" opacity="0.16"/>'
+            f'<clipPath id="{clip_id}"><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="24"/></clipPath>'
             f'<image href="data:image/png;base64,{html.escape(_safe_inline_image(image_b64))}" '
-            f'x="{x}" y="{y}" width="{w}" height="{h}" preserveAspectRatio="xMidYMid slice" />'
+            f'x="{x}" y="{y}" width="{w}" height="{h}" preserveAspectRatio="xMidYMid meet" '
+            f'clip-path="url(#{clip_id})" />'
         )
     # Stylized desk illustration as fallback hero (rect+keyboard+monitor silhouettes).
     kb_x = x + int(w * 0.16)
@@ -962,19 +968,23 @@ def _grid_three_svg(payload: dict, copy_result: dict, image_b64: str | None) -> 
         f'<text x="{pad}" y="{int(height*0.10) + i*40}" font-size="34" font-weight="800" fill="{ink}">{line}</text>'
         for i, line in enumerate(headline_lines)
     )
+    subcopy_svg = "".join(
+        f'<text x="{pad}" y="{int(height*0.865) + i*26}" font-size="20" fill="{ink}" opacity="0.78">{line}</text>'
+        for i, line in enumerate(_wrap(subcopy, 32, 2))
+    )
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect width="{width}" height="{height}" fill="{bg}"/>
   {headline_svg}
   {_hero_image_svg(payload, image_b64, big_x, big_y, big_w, big_h, wood, ink)}
-  <rect x="{small_x}" y="{small_y_top}" width="{small_w}" height="{small_h}" rx="20" fill="{accent}" opacity="0.85"/>
-  <rect x="{small_x + 20}" y="{small_y_top + 20}" width="{small_w - 40}" height="{small_h - 80}" rx="10" fill="{ink}" opacity="0.45"/>
-  <text x="{small_x + 24}" y="{small_y_top + small_h - 28}" font-size="20" font-weight="700" fill="{bg}">데스크 셋업 #1</text>
-  <rect x="{small_x}" y="{small_y_bot}" width="{small_w}" height="{small_h}" rx="20" fill="{wood}" opacity="0.92"/>
-  <rect x="{small_x + 20}" y="{small_y_bot + 20}" width="{small_w - 40}" height="{small_h - 80}" rx="10" fill="{ink}" opacity="0.55"/>
-  <text x="{small_x + 24}" y="{small_y_bot + small_h - 28}" font-size="20" font-weight="700" fill="{bg}">3D 미리보기 #2</text>
-  <text x="{pad}" y="{int(height*0.84)}" font-size="26" font-weight="700" fill="{ink}">{product}</text>
-  <text x="{pad}" y="{int(height*0.88)}" font-size="20" fill="{ink}" opacity="0.78">{subcopy}</text>
-  <text x="{pad}" y="{int(height*0.93)}" font-size="18" fill="{accent}">{hashtags}</text>
+  {_hero_image_svg(payload, image_b64, small_x, small_y_top, small_w, small_h, accent, ink)}
+  <rect x="{small_x}" y="{small_y_top + small_h - 32}" width="{small_w}" height="32" fill="{ink}" opacity="0.55"/>
+  <text x="{small_x + 16}" y="{small_y_top + small_h - 11}" font-size="16" font-weight="700" fill="#ffffff">셋업 컷 #1</text>
+  {_hero_image_svg(payload, image_b64, small_x, small_y_bot, small_w, small_h, wood, ink)}
+  <rect x="{small_x}" y="{small_y_bot + small_h - 32}" width="{small_w}" height="32" fill="{ink}" opacity="0.55"/>
+  <text x="{small_x + 16}" y="{small_y_bot + small_h - 11}" font-size="16" font-weight="700" fill="#ffffff">셋업 컷 #2</text>
+  <text x="{pad}" y="{int(height*0.83)}" font-size="26" font-weight="700" fill="{ink}">{product}</text>
+  {subcopy_svg}
+  <text x="{pad}" y="{int(height*0.96)}" font-size="18" fill="{accent}">{hashtags}</text>
 </svg>'''
 
 
@@ -1044,12 +1054,16 @@ def _promo_banner_svg(payload: dict, copy_result: dict, image_b64: str | None) -
         f'<text x="{pad}" y="{int(height*0.30) + i*60}" font-size="58" font-weight="900" fill="{ink}">{line}</text>'
         for i, line in enumerate(headline_lines)
     )
+    subcopy_svg = "".join(
+        f'<text x="{pad}" y="{int(height*0.52) + i*30}" font-size="22" fill="{ink}" opacity="0.78">{line}</text>'
+        for i, line in enumerate(_wrap(subcopy, 26, 2))
+    )
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect width="{width}" height="{height}" fill="{bg}"/>
   <rect x="0" y="0" width="{int(width*0.5)}" height="{height}" fill="{accent}" opacity="0.10"/>
   <text x="{pad}" y="{int(height*0.18)}" font-size="22" fill="{accent}" font-weight="700">PROMO · 광고 배너</text>
   {headline_svg}
-  <text x="{pad}" y="{int(height*0.58)}" font-size="22" fill="{ink}" opacity="0.78">{subcopy}</text>
+  {subcopy_svg}
   <text x="{pad}" y="{int(height*0.66)}" font-size="28" font-weight="700" fill="{ink}">{product}</text>
   <text x="{pad}" y="{int(height*0.72)}" font-size="24" fill="{ink}" opacity="0.78">{price}</text>
   <rect x="{pad}" y="{int(height*0.78)}" width="220" height="60" rx="30" fill="{accent}"/>
@@ -1334,7 +1348,7 @@ def _candidate_workflow_names(payload: dict) -> list[str]:
     explicit = _safe_workflow_name(payload.get("image_workflow"))
     if explicit:
         names.append(explicit)
-    for key in ("template", "theme"):
+    for key in ("template", "poster_template", "theme"):
         situ = _safe_workflow_name(payload.get(key))
         if situ:
             names.append(f"flux_{situ}")
@@ -1426,12 +1440,23 @@ def _download_comfyui_image_reference(job_id: str, image_url: str) -> dict:
     }
 
 
+# 중단·유실되어 queued/running 으로 굳은 좀비 job이 VRAM 해제를 영구 차단하지
+# 않도록, 생성 후 이 시간이 지난 non-terminal job은 더 이상 active로 치지 않는다.
+_COMFYUI_JOB_STALE_SECONDS = 600
+
+
 def _has_active_comfyui_jobs(exclude_job_id: str | None = None) -> bool:
+    now = int(time.time())
     for record in IMAGE_JOB_STORE.all().values():
         if exclude_job_id and record.get("job_id") == exclude_job_id:
             continue
-        if record.get("provider") == "comfyui" and record.get("status") not in COMFYUI_TERMINAL_STATUSES:
-            return True
+        if record.get("provider") != "comfyui":
+            continue
+        if record.get("status") in COMFYUI_TERMINAL_STATUSES:
+            continue
+        if now - int(record.get("created_at") or 0) > _COMFYUI_JOB_STALE_SECONDS:
+            continue  # stale 좀비 — 죽은 작업으로 간주, VRAM 해제를 막지 않음
+        return True
     return False
 
 

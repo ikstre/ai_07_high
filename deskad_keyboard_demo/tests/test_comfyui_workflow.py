@@ -1,6 +1,7 @@
 import json
 
 from backend import ai, config
+from backend.main import AdContentRequest
 
 
 def _settings(**overrides) -> config.Settings:
@@ -41,6 +42,21 @@ def test_select_uses_situational_template(tmp_path, monkeypatch):
 
     selected = ai._select_workflow_path({"template": "promo_banner"})
     assert selected == wf_dir / "flux_promo_banner.json"
+
+
+def test_select_uses_poster_template_field_from_api_payload(tmp_path, monkeypatch):
+    wf_dir = _make_dir(tmp_path, "flux_schnell_basic", "flux_promo_banner")
+    monkeypatch.setattr(ai, "get_settings", lambda: _settings(comfyui_workflows_dir=str(wf_dir)))
+
+    payload = AdContentRequest(poster_template="promo_banner").model_dump()
+    selected = ai._select_workflow_path(payload)
+    assert selected == wf_dir / "flux_promo_banner.json"
+
+
+def test_ad_content_request_preserves_explicit_image_workflow():
+    payload = AdContentRequest(image_workflow="flux_custom").model_dump()
+
+    assert payload["image_workflow"] == "flux_custom"
 
 
 def test_select_falls_back_to_default_when_no_match(tmp_path, monkeypatch):
