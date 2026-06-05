@@ -4,7 +4,6 @@ from __future__ import annotations
 import base64
 from html import escape
 from pathlib import Path
-from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,6 +37,7 @@ from .assets import enabled_asset_ids, load_desk_assets
 from .cad import copy_existing_glb, handle_model_upload_bytes
 from .config import get_settings, redacted_settings
 from .drawing_converter import convert_plate_drawing_to_glb
+from .filenames import unique_timestamped_model_path
 from .library import (
     load_reference_manifest,
     list_library_files,
@@ -81,6 +81,7 @@ app.mount("/shared/models", StaticFiles(directory=shared_model_dir(), check_dir=
 
 class KeyboardRenderRequest(BaseModel):
     """키보드 단품 렌더링 요청에서 공통 색상, 레이아웃, 내부 옵션을 검증한다."""
+    product_name: str = Field(default="커스텀 키보드 셋업", max_length=80)
     layout: str = Field(default="65")
     case_color: str = Field(default="#c8c1b2")
     keycap_color: str = Field(default="#f4ead7")
@@ -143,6 +144,7 @@ class UploadedModelRequest(BaseModel):
     """업로드 모델 파일명과 base64 본문을 검증한다."""
     filename: str = Field(max_length=255, pattern=r"^[^/\\\x00]+$")
     content_base64: str = Field(max_length=120_000_000)
+    product_name: str | None = Field(default=None, max_length=80)
 
 
 class LibraryModelRequest(BaseModel):
@@ -150,6 +152,7 @@ class LibraryModelRequest(BaseModel):
         description="Library path under models/, uploads/reference_drawings/, shared/models/, or shared/data/.",
         max_length=400,
     )
+    product_name: str | None = Field(default=None, max_length=80)
 
 
 class CopyExperimentRequest(AdContentRequest):
@@ -159,6 +162,7 @@ class CopyExperimentRequest(AdContentRequest):
 class PlateDrawingRenderRequest(BaseModel):
     """키보드 플레이트 도면을 GLB로 변환하기 위한 plate id를 검증한다."""
     plate_id: str = Field(max_length=120, pattern=r"^[A-Za-z0-9_\-./]+$")
+    product_name: str | None = Field(default=None, max_length=80)
 
 
 def _settings_base_url() -> str:
@@ -304,8 +308,8 @@ def model_viewer(model_url: str, camera: str = "perspective"):
 @app.post("/render/keyboard-preview")
 def render_keyboard_preview(request: KeyboardRenderRequest):
     """키보드 단품 GLB를 생성하고 접근 가능한 model_url과 메타데이터를 반환한다."""
-    model_name = f"keyboard_{request.layout}_{uuid4().hex[:8]}.glb"
-    output_path = MODEL_DIR / model_name
+    output_path = unique_timestamped_model_path(MODEL_DIR, request.product_name, fallback=f"keyboard_{request.layout}")
+    model_name = output_path.name
 
     metadata = build_keyboard_scene_glb(
         layout_path=_layout_path(request.layout),
@@ -337,8 +341,8 @@ def render_keyboard_preview(request: KeyboardRenderRequest):
 @app.post("/render/desk-setup")
 def render_desk_setup(request: DeskSetupRenderRequest):
     """전체 데스크 셋업 GLB를 생성하고 접근 가능한 model_url과 메타데이터를 반환한다."""
-    model_name = f"desk_setup_{request.layout}_{uuid4().hex[:8]}.glb"
-    output_path = MODEL_DIR / model_name
+    output_path = unique_timestamped_model_path(MODEL_DIR, request.product_name, fallback=f"desk_setup_{request.layout}")
+    model_name = output_path.name
 
     metadata = build_desk_setup_scene_glb(
         layout_path=_layout_path(request.layout),
@@ -384,6 +388,7 @@ def render_uploaded_model(request: UploadedModelRequest):
             upload_dir=UPLOAD_DIR,
             model_dir=MODEL_DIR,
             public_base_url=_settings_base_url(),
+            product_name=request.product_name,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -400,6 +405,7 @@ def render_plate_drawing(request: PlateDrawingRenderRequest):
             plate=plate,
             model_dir=MODEL_DIR,
             public_base_url=_settings_base_url(),
+            product_name=request.product_name,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -422,6 +428,7 @@ def prepare_library_model(request: LibraryModelRequest):
                 source_path=source_path,
                 model_dir=MODEL_DIR,
                 public_base_url=_settings_base_url(),
+                product_name=request.product_name,
             )
             return {
                 **result,
@@ -437,6 +444,7 @@ def prepare_library_model(request: LibraryModelRequest):
                 upload_dir=UPLOAD_DIR,
                 model_dir=MODEL_DIR,
                 public_base_url=_settings_base_url(),
+                product_name=request.product_name,
             )
         raise ValueError("Only GLB, STEP, and STP files can be prepared for the 3D viewer.")
     except ValueError as exc:
