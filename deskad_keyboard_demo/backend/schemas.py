@@ -8,6 +8,7 @@ from .assets import enabled_asset_ids
 class KeyboardRenderRequest(BaseModel):
     """Common keyboard rendering options shared by preview and setup requests."""
 
+    product_name: str = Field(default="커스텀 키보드 셋업", max_length=80)
     layout: str = Field(default="65")
     case_color: str = Field(default="#c8c1b2")
     keycap_color: str = Field(default="#f4ead7")
@@ -74,6 +75,7 @@ class UploadedModelRequest(BaseModel):
 
     filename: str = Field(max_length=255, pattern=r"^[^/\\\x00]+$")
     content_base64: str = Field(max_length=120_000_000)
+    product_name: str | None = Field(default=None, max_length=80)
 
 
 class LibraryModelRequest(BaseModel):
@@ -81,6 +83,7 @@ class LibraryModelRequest(BaseModel):
         description="Library path under models/, uploads/reference_drawings/, shared/models/, or shared/data/.",
         max_length=400,
     )
+    product_name: str | None = Field(default=None, max_length=80)
 
 
 class CopyExperimentRequest(AdContentRequest):
@@ -91,3 +94,4 @@ class PlateDrawingRenderRequest(BaseModel):
     """Plate id request for converting a keyboard plate drawing to GLB."""
 
     plate_id: str = Field(max_length=120, pattern=r"^[A-Za-z0-9_\-./]+$")
+    product_name: str | None = Field(default=None, max_length=80)
