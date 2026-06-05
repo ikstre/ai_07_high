@@ -912,14 +912,19 @@ def _add_keyboard_detailed(
         row = int(min(4, max(1, key["y"] + 1)))
         angle = _profile_row_angle(profile, row)
 
+        # 스위치 하우징은 조립된 보드에서 keycap 바로 아래로 항상 보이는 부분이라
+        # show_internals 와 무관하게 그린다. 이 하우징이 case 상단과 keycap 사이를
+        # 이어주므로, 빼면 clean 뷰(셋업 기본값 show_internals=False)에서 keycap 을
+        # 받칠 지오메트리가 없어 case 위로 0.5cm 가량 떠 보이는 분리가 생긴다.
+        builder.add_box(
+            f"switch housing {index + 1}",
+            (x, switch_base_y + switch_housing_h / 2, z),
+            (float(switch_family_params["housing_w"]), switch_housing_h, float(switch_family_params["housing_d"])),
+            switch_housing_mat,
+            taper=0.18,
+        )
+
         if show_internals:
-            builder.add_box(
-                f"switch housing {index + 1}",
-                (x, switch_base_y + switch_housing_h / 2, z),
-                (float(switch_family_params["housing_w"]), switch_housing_h, float(switch_family_params["housing_d"])),
-                switch_housing_mat,
-                taper=0.18,
-            )
             builder.add_box(
                 f"switch top {index + 1}",
                 (x, switch_base_y + switch_housing_h - 0.18, z),

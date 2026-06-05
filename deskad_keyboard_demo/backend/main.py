@@ -4,7 +4,6 @@ from __future__ import annotations
 import base64
 from html import escape
 from pathlib import Path
-from uuid import uuid4
 
 from fastapi.responses import HTMLResponse
 
@@ -35,6 +34,7 @@ from .cad import copy_existing_glb, handle_model_upload_bytes
 from .config import get_settings, redacted_settings
 from .drawing_converter import convert_plate_drawing_to_glb
 from .errors import bad_request, not_found, server_error
+from .filenames import unique_timestamped_model_path
 from .library import (
     resolve_static_library_path,
 )
@@ -150,8 +150,8 @@ def model_viewer(model_url: str, camera: str = "perspective"):
 @app.post("/render/keyboard-preview")
 def render_keyboard_preview(request: KeyboardRenderRequest):
     """키보드 단품 GLB를 생성하고 접근 가능한 model_url과 메타데이터를 반환한다."""
-    model_name = f"keyboard_{request.layout}_{uuid4().hex[:8]}.glb"
-    output_path = MODEL_DIR / model_name
+    output_path = unique_timestamped_model_path(MODEL_DIR, request.product_name, fallback=f"keyboard_{request.layout}")
+    model_name = output_path.name
 
     metadata = build_keyboard_scene_glb(
         layout_path=_layout_path(request.layout),
@@ -183,8 +183,8 @@ def render_keyboard_preview(request: KeyboardRenderRequest):
 @app.post("/render/desk-setup")
 def render_desk_setup(request: DeskSetupRenderRequest):
     """전체 데스크 셋업 GLB를 생성하고 접근 가능한 model_url과 메타데이터를 반환한다."""
-    model_name = f"desk_setup_{request.layout}_{uuid4().hex[:8]}.glb"
-    output_path = MODEL_DIR / model_name
+    output_path = unique_timestamped_model_path(MODEL_DIR, request.product_name, fallback=f"desk_setup_{request.layout}")
+    model_name = output_path.name
 
     metadata = build_desk_setup_scene_glb(
         layout_path=_layout_path(request.layout),
@@ -230,6 +230,7 @@ def render_uploaded_model(request: UploadedModelRequest):
             upload_dir=UPLOAD_DIR,
             model_dir=MODEL_DIR,
             public_base_url=_settings_base_url(),
+            product_name=request.product_name,
         )
     except ValueError as exc:
         raise bad_request(str(exc)) from exc
@@ -246,6 +247,7 @@ def render_plate_drawing(request: PlateDrawingRenderRequest):
             plate=plate,
             model_dir=MODEL_DIR,
             public_base_url=_settings_base_url(),
+            product_name=request.product_name,
         )
     except ValueError as exc:
         raise bad_request(str(exc)) from exc
@@ -268,6 +270,7 @@ def prepare_library_model(request: LibraryModelRequest):
                 source_path=source_path,
                 model_dir=MODEL_DIR,
                 public_base_url=_settings_base_url(),
+                product_name=request.product_name,
             )
             return {
                 **result,
@@ -283,6 +286,7 @@ def prepare_library_model(request: LibraryModelRequest):
                 upload_dir=UPLOAD_DIR,
                 model_dir=MODEL_DIR,
                 public_base_url=_settings_base_url(),
+                product_name=request.product_name,
             )
         raise ValueError("Only GLB, STEP, and STP files can be prepared for the 3D viewer.")
     except ValueError as exc:
