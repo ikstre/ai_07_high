@@ -369,14 +369,19 @@ DEFAULTS = {
     "desk_width": 120.0,
     "desk_depth": 60.0,
     "monitor_size": "27",
-    "asset_selection": ["mouse", "monitor", "monitor_arm", "desk_lamp", "plant"],
+    "asset_selection": ["mouse", "monitor"],
+    "selected_setup_item": "keyboard",
     "camera": "perspective",
     "model_url": None,
     "model_meta": None,
     "uploaded_model_url": None,
     "uploaded_model_meta": None,
     "library_model_path": None,
+    "library_model_picker_path": None,
     "selected_reference_path": None,
+    "selected_history_model_path": None,
+    "selected_history_model_url": None,
+    "selected_history_model_meta": None,
     "copy_result": None,
     "copy_experiment_result": None,
     "copy_selected_provider": None,
@@ -662,6 +667,157 @@ def render_reference_grid(references: list[dict], columns: int = 4) -> None:
             st.caption(f"{label} · {license_text}")
 
 
+def format_file_size(size_bytes: int | float | None) -> str:
+    size = float(size_bytes or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return "0B"
+
+
+def model_file_summary(item: dict) -> str:
+    modified = item.get("modified_at")
+    when = ""
+    if isinstance(modified, (int, float)):
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(modified)))
+    details = [item.get("kind") or "file", format_file_size(item.get("size_bytes"))]
+    if when:
+        details.append(when)
+    return " · ".join(str(part) for part in details if part)
+
+
+def render_generated_model_gallery(library: dict | None = None, height: int = 420) -> None:
+    library = library or fetch_model_library()
+    generated = [
+        item
+        for item in library.get("files", [])
+        if item.get("root") == "generated_models" and item.get("extension") in {".glb", ".gltf"}
+    ]
+    generated.sort(key=lambda item: float(item.get("modified_at") or 0), reverse=True)
+    if not generated:
+        st.caption("아직 저장된 생성 모델이 없습니다. 3D 셋업을 생성하면 이 영역에 누적됩니다.")
+        return
+
+    st.markdown("#### 이전 생성 모델")
+    st.caption("최근 생성한 GLB를 골라 미리보고, 아래 '현재 3D 결과로 불러오기'로 다시 가져올 수 있습니다.")
+    options = {item["path"]: item for item in generated[:40] if item.get("path")}
+    paths = list(options.keys())
+    if st.session_state.selected_history_model_path not in options:
+        st.session_state.selected_history_model_path = paths[0] if paths else None
+    selected_path = st.selectbox(
+        "저장된 모델",
+        options=paths,
+        key="selected_history_model_path",
+        format_func=lambda value: f"{options[value].get('name', value)} · {model_file_summary(options[value])}",
+    )
+    selected = options.get(selected_path)
+    if not selected:
+        return
+    st.session_state.selected_history_model_url = selected.get("url")
+    st.session_state.selected_history_model_meta = selected
+    meta_a, meta_b, meta_c = st.columns(3)
+    meta_a.caption(f"파일: {selected.get('name', '')}")
+    meta_b.caption(f"위치: {selected.get('path', '')}")
+    meta_c.caption(model_file_summary(selected))
+    if selected.get("url"):
+        render_model_viewer(selected["url"], height=height)
+        if st.button(
+            "이 결과를 현재 3D 결과로 불러오기",
+            type="primary",
+            use_container_width=True,
+            key="load_history_model",
+        ):
+            st.session_state.model_url = selected.get("url")
+            st.success(f"'{selected.get('name', '')}'을(를) 현재 3D 결과로 불러왔습니다.")
+            st.rerun()
+
+
+def render_shared_model_picker(height: int = 360) -> None:
+    """공용/외부 모델(이전 생성 결과 제외)을 selectbox로 골라 미리보기/사용한다.
+
+    이전 생성 결과는 옆 render_generated_model_gallery 가 담당하므로 여기선 제외한다.
+    (도면 단계 입력 패널에서 가상 셋업 결과 영역으로 옮겨온 picker)
+    """
+    library = fetch_model_library()
+    shared_status = library.get("shared", {})
+    st.caption(
+        f"공용 데이터: {shared_status.get('shared_data_dir', '/opt/shared_data')} "
+        f"({'있음' if shared_status.get('shared_data_exists') else '없음'}) · "
+        f"공용 모델: {shared_status.get('shared_model_dir', '/opt/shared_model')} "
+        f"({'있음' if shared_status.get('shared_model_exists') else '없음'})"
+    )
+    compatible = {".glb", ".step", ".stp"}
+    files = [
+        item
+        for item in library.get("files", [])
+        if item.get("extension") in compatible and item.get("root") != "generated_models"
+    ]
+    if not files:
+        st.caption(
+            "공용/외부 모델이 아직 없습니다. /opt/shared_model 또는 static/models에 외부 GLB/STEP/STP를 넣으면 "
+            "여기 FastAPI 미리보기에 연결됩니다. (이전 생성 결과는 옆 '이전 생성 모델'에서 불러오세요.)"
+        )
+        return
+
+    files.sort(key=lambda item: float(item.get("modified_at") or 0), reverse=True)
+    file_options = {item["path"]: item for item in files if item.get("path")}
+    if st.session_state.library_model_path not in file_options:
+        st.session_state.library_model_path = next(iter(file_options), None)
+    if st.session_state.get("library_model_picker_path") not in file_options:
+        st.session_state.library_model_picker_path = st.session_state.library_model_path
+
+    selected_path = st.selectbox(
+        "FastAPI 미리보기 모델",
+        options=list(file_options.keys()),
+        key="library_model_picker_path",
+        format_func=lambda value: f"{file_options[value].get('name', value)} · {file_options[value].get('kind', 'file')}",
+    )
+    st.session_state.library_model_path = selected_path
+    selected_item = file_options.get(selected_path, {})
+    st.caption(
+        f"선택됨: {selected_item.get('name', '')} · "
+        f"{selected_item.get('root', '')} · {format_file_size(selected_item.get('size_bytes'))}"
+    )
+
+    ext = (selected_item.get("extension") or "").lower()
+    if ext in {".glb", ".gltf"} and selected_item.get("url"):
+        render_model_viewer(selected_item["url"], height=height)
+    elif ext in {".step", ".stp"}:
+        st.caption("STEP/STP는 3D 미리보기 전 GLB 변환이 필요합니다. 아래 버튼으로 변환·로드하세요.")
+
+    if st.button(
+        "이 모델 미리보기/사용",
+        type="primary",
+        use_container_width=True,
+        key="use_selected_library_model",
+    ):
+        try:
+            prepare_library_model(selected_path)
+            st.success("공용 모델 준비 완료 — 아래 '업로드/공용 모델 미리보기'에 표시됩니다.")
+        except Exception as exc:
+            st.error(f"공용 모델 처리 실패: {exc}")
+
+
+def render_model_load_panel() -> None:
+    """선택 편집(가상 셋업) 패널용 '기존 모델 불러오기' 묶음.
+
+    이전 생성 모델(불러오기) + 공용/외부 모델 picker + 업로드/공용 모델 미리보기를
+    좁은 편집 패널 폭에 맞춰 세로로 쌓아 보여준다.
+    """
+    library = fetch_model_library()
+    render_generated_model_gallery(library, height=260)
+    st.divider()
+    st.markdown("#### 공용/외부 모델")
+    render_shared_model_picker(height=260)
+    if st.session_state.uploaded_model_url:
+        st.markdown("##### 업로드/공용 모델 미리보기")
+        render_model_viewer(st.session_state.uploaded_model_url, height=260)
+        if st.session_state.uploaded_model_meta:
+            with st.expander("업로드/공용 모델 메타데이터", expanded=False):
+                st.json(st.session_state.uploaded_model_meta)
+
+
 @st.cache_data(ttl=15)
 def fetch_security_config() -> dict:
     try:
@@ -789,6 +945,7 @@ def render_model_viewer(model_url: str, height: int = 720, camera: str | None = 
 
 def build_render_payload() -> dict:
     return {
+        "product_name": st.session_state.product_name,
         "layout": st.session_state.layout,
         "case_color": st.session_state.case_color,
         "keycap_color": st.session_state.keycap_color,
@@ -946,6 +1103,7 @@ def upload_reference_model(uploaded_file) -> None:
     payload = {
         "filename": uploaded_file.name,
         "content_base64": base64.b64encode(raw).decode("ascii"),
+        "product_name": st.session_state.product_name,
     }
     data = api_post("/render/uploaded-model", payload, timeout=45)
     st.session_state.uploaded_model_url = data["model_url"]
@@ -953,7 +1111,7 @@ def upload_reference_model(uploaded_file) -> None:
 
 
 def prepare_library_model(path: str) -> None:
-    data = api_post("/models/library/prepare", {"path": path}, timeout=45)
+    data = api_post("/models/library/prepare", {"path": path, "product_name": st.session_state.product_name}, timeout=45)
     st.session_state.uploaded_model_url = data["model_url"]
     st.session_state.uploaded_model_meta = data
 
@@ -1085,7 +1243,6 @@ def render_copy_experiment_picker() -> None:
     if st.session_state.copy_result:
         st.success(f"{provider_label(selected_provider)} 문구가 선택되었습니다. 포스터와 이미지 작업에 이 문구가 반영됩니다.")
 
-    columns = st.columns(min(2, max(1, len(results))))
     for index, item in enumerate(results):
         provider = item.get("provider", "unknown")
         label = provider_label(provider)
@@ -1094,24 +1251,21 @@ def render_copy_experiment_picker() -> None:
             label += f" · {model_name}"
         status = item.get("status", "unknown")
         copy = item.get("copy") or {}
-        with columns[index % len(columns)]:
-            with st.container(border=True):
+        with st.container(border=True):
+            head_col, action_col = st.columns([0.78, 0.22])
+            with head_col:
                 st.caption(f"{label} · {status}")
                 if copy:
-                    st.markdown(f"**{copy.get('headline') or '제목 없음'}**")
+                    st.markdown(f"##### {copy.get('headline') or '제목 없음'}")
                     if copy.get("subcopy"):
                         st.write(copy["subcopy"])
-                    for line in (copy.get("copies") or [])[:2]:
-                        st.caption(line)
-                    hashtags = " ".join((copy.get("hashtags") or [])[:4])
+                    bullets = list(copy.get("copies") or [])[:4]
+                    if bullets:
+                        for line in bullets:
+                            st.write(f"- {line}")
+                    hashtags = " ".join((copy.get("hashtags") or [])[:6])
                     if hashtags:
                         st.caption(hashtags)
-                    if st.button("이 문구 사용", key=f"use_copy_{index}_{provider}", use_container_width=True):
-                        selected = selected_copy_payload({**copy, "provider": copy.get("provider") or provider})
-                        if selected:
-                            st.session_state.copy_result = selected
-                            st.session_state.copy_selected_provider = provider
-                            st.rerun()
                 elif status == "not_configured":
                     st.caption("이 provider는 현재 환경 변수 설정이 없어 건너뜁니다.")
                     st.caption(f"model: {item.get('model', 'default')}")
@@ -1119,6 +1273,27 @@ def render_copy_experiment_picker() -> None:
                     st.caption(f"오류: {item['error']}")
                 else:
                     st.caption("응답 문구가 없습니다.")
+            with action_col:
+                if copy:
+                    current = st.session_state.copy_result or {}
+                    is_selected = (
+                        selected_provider == provider
+                        and current.get("headline") == copy.get("headline")
+                        and current.get("subcopy") == copy.get("subcopy")
+                    )
+                    if is_selected:
+                        st.success("선택됨")
+                    if st.button(
+                        "이 문구 사용",
+                        key=f"use_copy_{index}_{provider}",
+                        type="primary" if is_selected else "secondary",
+                        use_container_width=True,
+                    ):
+                        selected = selected_copy_payload({**copy, "provider": copy.get("provider") or provider})
+                        if selected:
+                            st.session_state.copy_result = selected
+                            st.session_state.copy_selected_provider = provider
+                            st.rerun()
 
 
 def go_next() -> None:
@@ -1222,6 +1397,7 @@ STEP_UI_CONTEXT = {
     "upload_reference_model": upload_reference_model,
     "fetch_reference_assets": fetch_reference_assets,
     "render_reference_grid": render_reference_grid,
+    "render_model_load_panel": render_model_load_panel,
     "fetch_model_library": fetch_model_library,
     "prepare_library_model": prepare_library_model,
     "fetch_desk_assets": fetch_desk_assets,
@@ -1236,171 +1412,165 @@ STEP_UI_CONTEXT = {
     "render_copy_experiment_picker": render_copy_experiment_picker,
 }
 
-left_col, result_col = st.columns([0.58, 2.05], gap="large")
+st.markdown('<div class="section-label">RESULT CANVAS / primary</div>', unsafe_allow_html=True)
+with st.container(border=True):
+    top_a, top_b, top_c = st.columns([0.45, 0.32, 0.23])
+    with top_a:
+        st.markdown("### 가상 데스크 셋업 결과")
+        st.caption("도면/규격 JSON, 셋업 미리보기, 광고 포스터와 문구를 한 화면에 누적 표시합니다.")
+    with top_b:
+        meta = st.session_state.model_meta or {}
+        kb_info = KEYBOARD_SIZE_INFO.get(st.session_state.layout, st.session_state.layout + "%")
+        mon_info = MONITOR_SIZES.get(st.session_state.monitor_size, st.session_state.monitor_size + '"')
+        desk_w = meta.get("desk_width", st.session_state.desk_width)
+        desk_d = meta.get("desk_depth", st.session_state.desk_depth)
+        st.markdown(
+            f"""
+            <span class="metric-chip">KB {kb_info}</span>
+            <span class="metric-chip">Mon {mon_info}</span>
+            <span class="metric-chip">Desk {desk_w:.0f}×{desk_d:.0f} cm</span>
+            <span class="metric-chip">{st.session_state.theme}</span>
+            """,
+            unsafe_allow_html=True,
+        )
+    with top_c:
+        if st.button("결과 새로고침", use_container_width=True):
+            try:
+                render_desk_setup()
+                st.rerun()
+            except Exception as exc:
+                st.error(f"실패: {exc}")
 
-with left_col:
-    st.markdown('<div class="section-label">INPUT PANEL / responsive</div>', unsafe_allow_html=True)
-    with st.container(border=True, height=500):
-        render_step_input_panel(STEP_UI_CONTEXT)
+    st.divider()
 
-    nav_a, nav_b = st.columns(2)
-    nav_a.button(
-        "이전",
-        use_container_width=True,
-        disabled=st.session_state.step <= 1,
-        on_click=go_previous,
-    )
-    nav_b.button(
-        "다음",
-        use_container_width=True,
-        disabled=st.session_state.step >= 4,
-        on_click=go_next,
-    )
-
-
-with result_col:
-    st.markdown('<div class="section-label">RESULT CANVAS / responsive</div>', unsafe_allow_html=True)
-    with st.container(border=True, height=1000):
-        top_a, top_b, top_c = st.columns([0.45, 0.3, 0.25])
-        with top_a:
-            st.markdown("### 가상 데스크 셋업 결과")
-            st.caption("도면/규격 JSON과 데스크테리어 항목을 기반으로 생성된 3D 미리보기와 광고 결과물")
-        with top_b:
-            meta = st.session_state.model_meta or {}
-            kb_info = KEYBOARD_SIZE_INFO.get(st.session_state.layout, st.session_state.layout + "%")
-            mon_info = MONITOR_SIZES.get(st.session_state.monitor_size, st.session_state.monitor_size + '"')
-            desk_w = meta.get("desk_width", st.session_state.desk_width)
-            desk_d = meta.get("desk_depth", st.session_state.desk_depth)
-            st.markdown(
-                f"""
-                <span class="metric-chip">KB {kb_info}</span>
-                <span class="metric-chip">Mon {mon_info}</span>
-                <span class="metric-chip">Desk {desk_w:.0f}×{desk_d:.0f} cm</span>
-                <span class="metric-chip">{st.session_state.theme}</span>
-                """,
-                unsafe_allow_html=True,
-            )
-        with top_c:
-            if st.button("결과 새로고침", use_container_width=True):
-                try:
-                    render_desk_setup()
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"실패: {exc}")
-
-        st.divider()
-
-        setup_tab, upload_tab, poster_tab = st.tabs(["3D 셋업", "업로드 모델", "광고 포스터"])
-
-        with setup_tab:
-            if st.session_state.model_url:
-                render_model_viewer(st.session_state.model_url, height=600)
-            else:
-                st.markdown("#### 아직 생성된 3D 결과가 없습니다.")
-                st.write("왼쪽 입력 패널에서 `가상 셋업` 단계로 이동한 뒤 `3D 데스크 셋업 생성`을 누르면 이 영역에 결과가 표시됩니다.")
+    preview_col, edit_col = st.columns([0.68, 0.32], gap="large")
+    with preview_col:
+        st.markdown("### 3D 셋업")
+        if st.session_state.model_url:
+            render_model_viewer(st.session_state.model_url, height=650)
+            if st.session_state.model_meta:
+                with st.expander("현재 셋업 메타데이터", expanded=False):
+                    st.json(st.session_state.model_meta)
+        else:
+            st.markdown("#### 아직 생성된 3D 결과가 없습니다.")
+            st.write("오른쪽 편집 패널에서 셋업 구성을 정한 뒤 `3D 데스크 셋업 생성`을 누르면 이 영역에 결과가 표시됩니다.")
+            with st.expander("현재 렌더링 payload", expanded=False):
                 st.json(build_render_payload())
+    with edit_col:
+        st.markdown("### 선택 편집")
+        with st.container(border=True):
+            render_step_input_panel(STEP_UI_CONTEXT)
+            st.divider()
+            nav_a, nav_b = st.columns(2)
+            nav_a.button(
+                "이전",
+                use_container_width=True,
+                disabled=st.session_state.step <= 1,
+                on_click=go_previous,
+            )
+            nav_b.button(
+                "다음",
+                use_container_width=True,
+                disabled=st.session_state.step >= 4,
+                on_click=go_next,
+            )
 
-        with upload_tab:
-            if st.session_state.uploaded_model_url:
-                render_model_viewer(st.session_state.uploaded_model_url, height=600)
-                if st.session_state.uploaded_model_meta:
-                    st.json(st.session_state.uploaded_model_meta)
-            else:
-                st.write("STEP/STP/GLB 파일을 업로드하면 이 탭에서 별도로 확인할 수 있습니다.")
-                st.caption("현재 VM에 STEP 변환 CLI가 없으면 프록시 GLB로 미리보기를 제공합니다. `.env`의 STEP_CONVERTER_CMD를 설정하면 실제 변환으로 전환됩니다.")
+    st.divider()
 
-        with poster_tab:
-            poster = st.session_state.poster_result
-            if poster:
-                template_label = POSTER_TEMPLATE_LABELS.get(poster.get("poster_template", ""), poster.get("poster_template", ""))
-                image_reference = poster.get("image_reference") or poster.get("local_image_reference") or {}
-                badge = f"`{template_label}`"
-                if poster.get("image_embedded"):
-                    badge += "  ·  이미지 합성"
-                elif image_reference.get("error"):
-                    badge += "  ·  이미지 생성 오류"
-                st.caption(badge)
-                poster_svg = fetch_text_asset(poster["poster_url"])
-                components.html(
-                    responsive_svg_document(poster_svg),
-                    height=poster_preview_height(poster_svg),
-                    scrolling=False,
+    with st.expander("광고 포스터 / 이미지 작업", expanded=bool(st.session_state.poster_result)):
+        st.markdown("### 광고 포스터")
+        poster = st.session_state.poster_result
+        if poster:
+            template_label = POSTER_TEMPLATE_LABELS.get(poster.get("poster_template", ""), poster.get("poster_template", ""))
+            image_reference = poster.get("image_reference") or poster.get("local_image_reference") or {}
+            badge = f"`{template_label}`"
+            if poster.get("image_embedded"):
+                badge += "  ·  이미지 합성"
+            elif image_reference.get("error"):
+                badge += "  ·  이미지 생성 오류"
+            st.caption(badge)
+            poster_svg = fetch_text_asset(poster["poster_url"])
+            components.html(
+                responsive_svg_document(poster_svg),
+                height=poster_preview_height(poster_svg),
+                scrolling=False,
+            )
+            download_a, download_b = st.columns(2)
+            download_a.download_button(
+                "포스터 다운로드 (SVG · 이미지 합성 포함)",
+                data=poster_svg,
+                file_name=f"deskad_poster_{poster.get('poster_template', 'minimal_card')}.svg",
+                mime="image/svg+xml",
+                use_container_width=True,
+            )
+            try:
+                pptx_data = build_poster_pptx(
+                    poster_svg=poster_svg,
+                    copy_result=st.session_state.copy_result or poster.get("copy") or {},
+                    poster=poster,
+                    product=current_product_export_payload(),
                 )
-                st.download_button(
-                    "⬇ 포스터 다운로드 (SVG · 이미지 합성 포함)",
-                    data=poster_svg,
-                    file_name=f"deskad_poster_{poster.get('poster_template', 'minimal_card')}.svg",
-                    mime="image/svg+xml",
+                download_b.download_button(
+                    "포스터 다운로드 (PPTX)",
+                    data=pptx_data,
+                    file_name=f"deskad_poster_{poster.get('poster_template', 'minimal_card')}.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                     use_container_width=True,
                 )
-                try:
-                    pptx_data = build_poster_pptx(
-                        poster_svg=poster_svg,
-                        copy_result=st.session_state.copy_result or poster.get("copy") or {},
-                        poster=poster,
-                        product=current_product_export_payload(),
-                    )
-                    st.download_button(
-                        "⬇ 포스터 다운로드 (PPTX)",
-                        data=pptx_data,
-                        file_name=f"deskad_poster_{poster.get('poster_template', 'minimal_card')}.pptx",
-                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        use_container_width=True,
-                    )
-                except Exception as exc:
-                    st.caption(f"PPT 생성 실패: {exc}")
-                with st.expander("이미지 생성 프롬프트", expanded=False):
-                    st.write(poster["image_prompt"])
-                if image_reference:
-                    with st.expander("이미지 모델 응답", expanded=False):
-                        st.json(image_reference)
-            else:
-                st.write("광고 콘텐츠 단계에서 `포스터 생성`을 누르면 SVG 포스터와 생성 프롬프트가 표시됩니다.")
-                st.caption("로컬 이미지 모델 (LOCAL_IMAGE_ENDPOINT) 이 설정되어 있으면 생성된 이미지가 포스터에 직접 합성됩니다.")
+            except Exception as exc:
+                download_b.caption(f"PPT 생성 실패: {exc}")
+            with st.expander("이미지 생성 프롬프트", expanded=False):
+                st.write(poster["image_prompt"])
+            if image_reference:
+                with st.expander("이미지 모델 응답", expanded=False):
+                    st.json(image_reference)
+        else:
+            st.write("광고 콘텐츠 단계에서 `포스터 생성`을 누르면 SVG 포스터와 생성 프롬프트가 표시됩니다.")
+            st.caption("로컬 이미지 모델 (LOCAL_IMAGE_ENDPOINT) 이 설정되어 있으면 생성된 이미지가 포스터에 직접 합성됩니다.")
 
-            image_job_result = st.session_state.image_job_result
-            if image_job_result:
-                job = image_job_result.get("job", {})
-                job_id = job.get("job_id")
-                with st.expander("실사 이미지 작업 상태", expanded=job.get("status") not in IMAGE_JOB_TERMINAL_STATUSES):
-                    st.caption(f"{job.get('provider', 'fallback')} · {job.get('status', 'unknown')} · {job.get('width', '')}×{job.get('height', '')}")
-                    col_refresh, col_quality = st.columns(2)
-                    if col_refresh.button("이미지 작업 상태 갱신", use_container_width=True):
-                        try:
-                            refresh_image_job()
-                            st.rerun()
-                        except Exception as exc:
-                            st.error(f"상태 확인 실패: {exc}")
-                    if col_quality.button(
-                        "이미지 품질 검사 실행",
-                        use_container_width=True,
-                        disabled=job.get("status") != "completed" or not job_id,
-                    ):
-                        try:
-                            st.session_state.image_quality_report = api_post(
-                                f"/ai/image/jobs/{job_id}/quality", {}, timeout=30
-                            )
-                        except Exception as exc:
-                            st.error(f"품질 검사 실패: {exc}")
-                    st.json(job)
-                if job.get("status") == "completed":
-                    st.caption("완료된 이미지 작업은 다음 포스터 생성 시 자동 합성 후보로 사용됩니다.")
-                auto_poll_image_job()
-                quality = st.session_state.get("image_quality_report")
-                if quality and quality.get("report"):
-                    report = quality["report"]
-                    with st.expander("이미지 품질 검사 결과", expanded=False):
-                        st.caption(
-                            f"{report.get('evaluator', 'skeleton')} · "
-                            f"{report.get('width', '')}×{report.get('height', '')} · "
-                            f"{report.get('aspect_ratio_actual', 'unknown')} · "
-                            f"{(report.get('bytes') or 0) // 1024}KB"
+        image_job_result = st.session_state.image_job_result
+        if image_job_result:
+            job = image_job_result.get("job", {})
+            job_id = job.get("job_id")
+            with st.expander("실사 이미지 작업 상태", expanded=job.get("status") not in IMAGE_JOB_TERMINAL_STATUSES):
+                st.caption(f"{job.get('provider', 'fallback')} · {job.get('status', 'unknown')} · {job.get('width', '')}×{job.get('height', '')}")
+                col_refresh, col_quality = st.columns(2)
+                if col_refresh.button("이미지 작업 상태 갱신", use_container_width=True):
+                    try:
+                        refresh_image_job()
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"상태 확인 실패: {exc}")
+                if col_quality.button(
+                    "이미지 품질 검사 실행",
+                    use_container_width=True,
+                    disabled=job.get("status") != "completed" or not job_id,
+                ):
+                    try:
+                        st.session_state.image_quality_report = api_post(
+                            f"/ai/image/jobs/{job_id}/quality", {}, timeout=30
                         )
-                        st.json(report)
+                    except Exception as exc:
+                        st.error(f"품질 검사 실패: {exc}")
+                st.json(job)
+            if job.get("status") == "completed":
+                st.caption("완료된 이미지 작업은 다음 포스터 생성 시 자동 합성 후보로 사용됩니다.")
+            auto_poll_image_job()
+            quality = st.session_state.get("image_quality_report")
+            if quality and quality.get("report"):
+                report = quality["report"]
+                with st.expander("이미지 품질 검사 결과", expanded=False):
+                    st.caption(
+                        f"{report.get('evaluator', 'skeleton')} · "
+                        f"{report.get('width', '')}×{report.get('height', '')} · "
+                        f"{report.get('aspect_ratio_actual', 'unknown')} · "
+                        f"{(report.get('bytes') or 0) // 1024}KB"
+                    )
+                    st.json(report)
 
-        st.divider()
-
-        ad_left, ad_right = st.columns([0.66, 0.34])
+    with st.expander("광고 카드 / 문구 후보", expanded=bool(st.session_state.copy_experiment_result or st.session_state.copy_result)):
+        st.markdown("### 광고 카드와 문구")
+        ad_left, ad_right = st.columns([0.62, 0.38], gap="large")
         with ad_left:
             st.markdown("#### 광고 카드 미리보기")
             result = st.session_state.copy_result or {}
@@ -1424,7 +1594,7 @@ with result_col:
                 unsafe_allow_html=True,
             )
         with ad_right:
-            st.markdown("#### 생성 문구")
+            st.markdown("#### 선택 문구 편집")
             result = st.session_state.copy_result
             if result:
                 st.caption(f"선택 provider: {provider_label(st.session_state.get('copy_selected_provider') or result.get('provider'))}")
@@ -1436,6 +1606,8 @@ with result_col:
                     st.caption(f"fallback note: {result['error']}")
             else:
                 if st.session_state.copy_experiment_result:
-                    st.caption("광고 콘텐츠 단계의 후보 카드에서 사용할 문구를 선택하세요.")
+                    st.caption("아래 후보 카드에서 사용할 문구를 선택하세요.")
                 else:
                     st.caption("광고 콘텐츠 단계에서 문구를 생성하면 여기에 표시됩니다.")
+
+        render_copy_experiment_picker()

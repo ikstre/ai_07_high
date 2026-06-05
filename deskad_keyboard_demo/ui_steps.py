@@ -14,10 +14,51 @@ DRAWING_UPLOAD_OPTIONS = ["샘플 JSON 사용", "STEP/GLB 파일 업로드"]
 THEME_OPTIONS = ["minimal", "pastel", "premium", "gaming"]
 AD_TONE_OPTIONS = ["프리미엄형", "감성형", "할인형", "기능강조형"]
 IMAGE_RATIO_OPTIONS = ["1:1", "4:5", "16:9"]
+FIXED_SETUP_ITEMS = ["keyboard", "desk"]
+SETUP_ITEM_LABELS = {
+    "keyboard": "키보드",
+    "desk": "책상",
+    "deskmat": "데스크매트",
+    "monitor": "모니터",
+    "monitor_arm": "모니터암",
+    "mouse": "마우스",
+    "monitor_light_bar": "모니터 라이트 바",
+    "desk_lamp": "데스크 조명",
+    "plant": "화분",
+    "speakers": "스피커",
+    "desk_shelf": "모니터 받침대",
+    "notebook": "노트",
+    "headphone_stand": "헤드폰 스탠드",
+    "phone_stand": "스마트폰 스탠드",
+    "keycap_tray": "키캡 트레이",
+    "coffee_mug": "머그컵",
+    "digital_clock": "디지털 시계",
+    "aroma_diffuser": "아로마 디퓨저",
+    "wireless_charger": "무선 충전 패드",
+    "pen_holder": "펜 홀더",
+    "book_stack": "책 묶음",
+    "humidifier": "가습기",
+    "photo_frame": "사진 액자",
+    "usb_hub": "USB 허브",
+    "mouse_pad_round": "라운드 마우스패드",
+}
 
 
 def _option_index(options: list[str], value: str, default: int = 0) -> int:
     return options.index(value) if value in options else default
+
+
+def _asset_enabled(asset_id: str) -> bool:
+    return asset_id in set(st.session_state.asset_selection)
+
+
+def _set_asset_enabled(asset_id: str, enabled: bool) -> None:
+    selected = list(dict.fromkeys(st.session_state.asset_selection))
+    if enabled and asset_id not in selected:
+        selected.append(asset_id)
+    elif not enabled:
+        selected = [item for item in selected if item != asset_id]
+    st.session_state.asset_selection = selected
 
 
 def render_step_input_panel(ctx: dict[str, Any]) -> None:
@@ -88,7 +129,7 @@ def _render_drawing_data_step(ctx: dict[str, Any]) -> None:
             except Exception as exc:
                 st.error(f"업로드 처리 실패: {exc}")
 
-    _render_library_picker(ctx)
+    _render_drawing_references(ctx)
     model_info = keyboard_model_defaults[st.session_state.keyboard_model]
     st.info(f"기본값: {st.session_state.keyboard_model} / {model_info['layout']} 배열\n\n{model_info['description']}")
 
@@ -96,55 +137,31 @@ def _render_drawing_data_step(ctx: dict[str, Any]) -> None:
     _render_asset_selection(ctx)
 
 
-def _render_library_picker(ctx: dict[str, Any]) -> None:
-    with st.expander("공용 모델/도면 라이브러리", expanded=True):
-        references = ctx["fetch_reference_assets"]()
-        downloaded_refs = [item for item in references if item.get("downloaded")]
-        st.caption(f"노션 리서치 기반 레퍼런스 {len(references)}개 · 다운로드 완료 {len(downloaded_refs)}개")
-        if downloaded_refs:
-            ctx["render_reference_grid"](downloaded_refs)
-            ref_options = {item["path"]: item for item in downloaded_refs if item.get("path")}
-            if st.session_state.selected_reference_path not in ref_options:
-                st.session_state.selected_reference_path = next(iter(ref_options), None)
-            selected_ref = st.selectbox(
-                "다운로드된 도면/레퍼런스",
-                options=list(ref_options.keys()),
-                key="selected_reference_path",
-                format_func=lambda value: f"{ref_options[value].get('label', value)} · {ref_options[value].get('license', 'license check')}",
-            )
-            ref_item = ref_options.get(selected_ref, {})
-            st.caption(f"출처: {ref_item.get('source_url', '')}")
-        else:
-            st.caption("아직 다운로드된 노션 레퍼런스가 없습니다. 다운로드 스크립트 실행 후 표시됩니다.")
-
-        library = ctx["fetch_model_library"]()
-        shared_status = library.get("shared", {})
-        st.caption(
-            f"공용 데이터: {shared_status.get('shared_data_dir', '/opt/shared_data')} "
-            f"({'있음' if shared_status.get('shared_data_exists') else '없음'}) · "
-            f"공용 모델: {shared_status.get('shared_model_dir', '/opt/shared_model')} "
-            f"({'있음' if shared_status.get('shared_model_exists') else '없음'})"
+def _render_drawing_references(ctx: dict[str, Any]) -> None:
+    st.markdown("##### 공용 도면/레퍼런스 라이브러리")
+    references = ctx["fetch_reference_assets"]()
+    # 노션에 올라온 도면/레퍼런스는 모두 공용으로 사용한다(shared/data 에서 서빙).
+    shared_refs = [item for item in references if item.get("downloaded")]
+    st.caption(f"공용 도면/레퍼런스 {len(shared_refs)}개 (노션 리서치 기반, 전체 공용 사용)")
+    if shared_refs:
+        ref_options = {item["path"]: item for item in shared_refs if item.get("path")}
+        if st.session_state.selected_reference_path not in ref_options:
+            st.session_state.selected_reference_path = next(iter(ref_options), None)
+        selected_ref = st.selectbox(
+            "공용 도면/레퍼런스",
+            options=list(ref_options.keys()),
+            key="selected_reference_path",
+            format_func=lambda value: f"{ref_options[value].get('label', value)} · {ref_options[value].get('license', 'license check')}",
         )
-        compatible = {".glb", ".step", ".stp"}
-        files = [item for item in library.get("files", []) if item.get("extension") in compatible]
-        if files:
-            file_options = {item["path"]: item for item in files}
-            if st.session_state.library_model_path not in file_options:
-                st.session_state.library_model_path = next(iter(file_options), None)
-            selected_file = st.selectbox(
-                "FastAPI 미리보기 모델",
-                options=list(file_options.keys()),
-                key="library_model_path",
-                format_func=lambda value: f"{file_options[value].get('name', value)} · {file_options[value].get('kind', 'file')}",
-            )
-            if st.button("공용 모델 미리보기", use_container_width=True):
-                try:
-                    ctx["prepare_library_model"](selected_file)
-                    st.success("공용 모델 준비 완료")
-                except Exception as exc:
-                    st.error(f"공용 모델 처리 실패: {exc}")
-        else:
-            st.caption("/opt/shared_model 또는 static/models에 GLB/STEP/STP 파일을 넣으면 여기서 바로 FastAPI 미리보기에 연결됩니다.")
+        ref_item = ref_options.get(selected_ref, {})
+        st.caption(f"출처: {ref_item.get('source_url', '')}")
+        if ref_item.get("url"):
+            ctx["render_reference_grid"]([ref_item], columns=1)
+    else:
+        st.caption("아직 공용 도면/레퍼런스가 없습니다. 노션 도면 다운로드 스크립트 실행 후 표시됩니다.")
+
+    # 이전 생성·공용/외부 모델 '불러오기'는 가상 셋업 단계의 '선택 편집' 패널로 옮겼다.
+    st.caption("이전 생성·공용/외부 모델 불러오기는 가상 셋업 단계의 '기존 모델 불러오기'에 있습니다.")
 
 
 def _render_keyboard_detail_controls(ctx: dict[str, Any]) -> None:
@@ -232,11 +249,137 @@ def _render_asset_selection(ctx: dict[str, Any]) -> None:
 
 def _render_virtual_setup_step(ctx: dict[str, Any]) -> None:
     st.markdown("#### 가상 셋업")
+    _render_setup_composition(ctx)
+
+    active_items = _active_setup_items(ctx)
+    if st.session_state.selected_setup_item not in active_items:
+        st.session_state.selected_setup_item = active_items[0]
+    st.radio(
+        "편집할 제품",
+        active_items,
+        key="selected_setup_item",
+        horizontal=True,
+        format_func=lambda item: SETUP_ITEM_LABELS.get(item, item),
+    )
+
+    selected = st.session_state.selected_setup_item
+    if selected == "keyboard":
+        _render_keyboard_setup_controls(ctx)
+    elif selected == "desk":
+        _render_desk_setup_controls()
+    elif selected == "monitor":
+        _render_monitor_setup_controls(ctx)
+    elif selected == "mouse":
+        _render_mouse_setup_controls()
+    elif selected == "deskmat":
+        _render_deskmat_setup_controls()
+    elif selected == "monitor_arm":
+        _render_monitor_arm_setup_controls(ctx)
+    else:
+        _render_generic_asset_controls(selected, ctx)
+
     st.session_state.theme = st.selectbox(
         "광고 스타일",
         THEME_OPTIONS,
         index=_option_index(THEME_OPTIONS, st.session_state.theme),
     )
+
+    if st.button("3D 데스크 셋업 생성", type="primary", use_container_width=True):
+        try:
+            ctx["render_desk_setup"]()
+            st.success("3D GLB 생성 완료")
+        except Exception as exc:
+            st.error(f"렌더링 실패: {exc}")
+
+    # 새로 생성하는 대신 이전 생성 결과나 공용/외부 모델을 불러올 수 있게 한다.
+    with st.expander("기존 모델 불러오기 (이전 생성 / 공용·외부)", expanded=False):
+        ctx["render_model_load_panel"]()
+
+
+def _render_setup_composition(ctx: dict[str, Any]) -> None:
+    assets = ctx["fetch_desk_assets"]()
+    asset_labels = {asset["id"]: SETUP_ITEM_LABELS.get(asset["id"], asset["label"]) for asset in assets}
+    st.caption("기본 구성: 키보드 · 책상")
+    st.session_state.asset_selection = st.multiselect(
+        "셋업 구성품",
+        options=[asset["id"] for asset in assets],
+        default=[item for item in st.session_state.asset_selection if item in asset_labels],
+        format_func=lambda item: asset_labels.get(item, item),
+    )
+
+
+def _active_setup_items(ctx: dict[str, Any]) -> list[str]:
+    available_assets = {asset["id"] for asset in ctx["fetch_desk_assets"]()}
+    selected_assets = [item for item in st.session_state.asset_selection if item in available_assets]
+    return FIXED_SETUP_ITEMS + [item for item in selected_assets if item not in FIXED_SETUP_ITEMS]
+
+
+def _render_keyboard_setup_controls(ctx: dict[str, Any]) -> None:
+    keyboard_model_defaults = ctx["KEYBOARD_MODEL_DEFAULTS"]
+    keyboard_size_info = ctx["KEYBOARD_SIZE_INFO"]
+    st.selectbox(
+        "키보드 모델",
+        list(keyboard_model_defaults.keys()),
+        key="keyboard_model",
+        on_change=ctx["sync_layout_from_model"],
+    )
+    layout_options = ctx["fetch_layout_ids"]()
+    st.session_state.layout = st.selectbox(
+        "배열",
+        layout_options,
+        index=layout_options.index(st.session_state.layout) if st.session_state.layout in layout_options else min(1, len(layout_options) - 1),
+        format_func=lambda k: keyboard_size_info.get(k, k + "%"),
+    )
+    color_a, color_b, color_c = st.columns(3)
+    with color_a:
+        st.session_state.case_color = st.color_picker("하우징", st.session_state.case_color)
+    with color_b:
+        st.session_state.keycap_color = st.color_picker("키캡", st.session_state.keycap_color)
+    with color_c:
+        st.session_state.accent_keycap_color = st.color_picker("포인트 키", st.session_state.accent_keycap_color)
+    detail_a, detail_b = st.columns(2)
+    with detail_a:
+        st.session_state.case_finish = st.selectbox(
+            "케이스 마감",
+            list(ctx["CASE_FINISH_LABELS"].keys()),
+            index=list(ctx["CASE_FINISH_LABELS"].keys()).index(st.session_state.case_finish),
+            format_func=lambda k: ctx["CASE_FINISH_LABELS"][k],
+        )
+        st.session_state.switch_family = st.selectbox(
+            "스위치 구조",
+            list(ctx["SWITCH_FAMILY_LABELS"].keys()),
+            index=list(ctx["SWITCH_FAMILY_LABELS"].keys()).index(st.session_state.switch_family),
+            format_func=lambda k: ctx["SWITCH_FAMILY_LABELS"][k],
+        )
+        st.session_state.keycap_profile = st.selectbox(
+            "키캡 프로파일",
+            list(ctx["KEYCAP_PROFILE_LABELS"].keys()),
+            index=list(ctx["KEYCAP_PROFILE_LABELS"].keys()).index(st.session_state.keycap_profile),
+            format_func=lambda k: ctx["KEYCAP_PROFILE_LABELS"][k],
+        )
+    with detail_b:
+        st.session_state.plate_material = st.selectbox(
+            "보강판 재질",
+            list(ctx["PLATE_MATERIAL_LABELS"].keys()),
+            index=list(ctx["PLATE_MATERIAL_LABELS"].keys()).index(st.session_state.plate_material),
+            format_func=lambda k: ctx["PLATE_MATERIAL_LABELS"][k],
+        )
+        st.session_state.switch_stem = st.selectbox(
+            "스위치 stem",
+            list(ctx["SWITCH_STEM_LABELS"].keys()),
+            index=list(ctx["SWITCH_STEM_LABELS"].keys()).index(st.session_state.switch_stem),
+            format_func=lambda k: ctx["SWITCH_STEM_LABELS"][k],
+        )
+        st.session_state.mount_type = st.selectbox(
+            "마운트 방식",
+            list(ctx["MOUNT_TYPE_LABELS"].keys()),
+            index=list(ctx["MOUNT_TYPE_LABELS"].keys()).index(st.session_state.mount_type),
+            format_func=lambda k: ctx["MOUNT_TYPE_LABELS"][k],
+        )
+    st.session_state.show_internals = st.checkbox("내부 구조 렌더 노출", value=st.session_state.show_internals)
+
+
+def _render_desk_setup_controls() -> None:
     desk_presets = {
         "120 x 60 cm": (120.0, 60.0),
         "120 x 80 cm": (120.0, 80.0),
@@ -259,49 +402,49 @@ def _render_virtual_setup_step(ctx: dict[str, Any]) -> None:
         st.session_state.desk_width = st.slider("책상 폭(cm)", 100.0, 200.0, float(st.session_state.desk_width), 5.0)
     with dim_b:
         st.session_state.desk_depth = st.slider("책상 깊이(cm)", 50.0, 90.0, float(st.session_state.desk_depth), 5.0)
+    st.session_state.desk_color = st.color_picker("책상", st.session_state.desk_color)
 
-    mon_a, mon_b = st.columns(2)
-    with mon_a:
-        monitor_sizes = ctx["MONITOR_SIZES"]
-        monitor_arm_labels = ctx["MONITOR_ARM_LABELS"]
-        st.session_state.monitor_size = st.selectbox(
-            "모니터 크기",
-            options=list(monitor_sizes.keys()),
-            index=list(monitor_sizes.keys()).index(st.session_state.monitor_size),
-            format_func=lambda k: monitor_sizes[k],
-        )
-        st.session_state.monitor_arm_style = st.selectbox(
-            "모니터암 스타일",
-            options=list(monitor_arm_labels.keys()),
-            index=list(monitor_arm_labels.keys()).index(st.session_state.monitor_arm_style),
-            format_func=lambda k: monitor_arm_labels[k],
-        )
-    with mon_b:
-        kb_layout = st.session_state.layout
-        keyboard_size_info = ctx["KEYBOARD_SIZE_INFO"]
-        st.caption(f"키보드: {keyboard_size_info.get(kb_layout, kb_layout + '% 배열')}")
-        st.caption("렌더 단위: 1 GLB unit = 1 cm  |  1u = 1.905 cm")
-        st.caption(f"케이스: {ctx['CASE_FINISH_LABELS'][st.session_state.case_finish]}")
-        st.caption(f"보강판: {ctx['PLATE_MATERIAL_LABELS'][st.session_state.plate_material]}")
-        st.caption(f"스위치: {ctx['SWITCH_STEM_LABELS'][st.session_state.switch_stem]} · {ctx['SWITCH_FAMILY_LABELS'][st.session_state.switch_family]}")
-        st.caption(f"키캡: {ctx['KEYCAP_PROFILE_LABELS'][st.session_state.keycap_profile]}")
-        st.caption(f"마운트: {ctx['MOUNT_TYPE_LABELS'][st.session_state.mount_type]}")
-    color_a, color_b = st.columns(2)
-    with color_a:
-        st.session_state.case_color = st.color_picker("하우징", st.session_state.case_color)
-        st.session_state.keycap_color = st.color_picker("키캡", st.session_state.keycap_color)
-        st.session_state.accent_keycap_color = st.color_picker("포인트 키", st.session_state.accent_keycap_color)
-    with color_b:
-        st.session_state.deskmat_color = st.color_picker("데스크매트", st.session_state.deskmat_color)
-        st.session_state.desk_color = st.color_picker("책상", st.session_state.desk_color)
-        st.session_state.mouse_color = st.color_picker("마우스", st.session_state.mouse_color)
 
-    if st.button("3D 데스크 셋업 생성", type="primary", use_container_width=True):
-        try:
-            ctx["render_desk_setup"]()
-            st.success("3D GLB 생성 완료")
-        except Exception as exc:
-            st.error(f"렌더링 실패: {exc}")
+def _render_monitor_setup_controls(ctx: dict[str, Any]) -> None:
+    monitor_sizes = ctx["MONITOR_SIZES"]
+    st.session_state.monitor_size = st.selectbox(
+        "모니터 크기",
+        options=list(monitor_sizes.keys()),
+        index=list(monitor_sizes.keys()).index(st.session_state.monitor_size),
+        format_func=lambda k: monitor_sizes[k],
+    )
+    include_arm = st.checkbox("모니터암 포함", value=_asset_enabled("monitor_arm"))
+    _set_asset_enabled("monitor_arm", include_arm)
+    if include_arm:
+        _render_monitor_arm_setup_controls(ctx)
+
+
+def _render_monitor_arm_setup_controls(ctx: dict[str, Any]) -> None:
+    monitor_arm_labels = ctx["MONITOR_ARM_LABELS"]
+    st.session_state.monitor_arm_style = st.selectbox(
+        "모니터암 스타일",
+        options=list(monitor_arm_labels.keys()),
+        index=list(monitor_arm_labels.keys()).index(st.session_state.monitor_arm_style),
+        format_func=lambda k: monitor_arm_labels[k],
+    )
+
+
+def _render_mouse_setup_controls() -> None:
+    st.session_state.mouse_color = st.color_picker("마우스", st.session_state.mouse_color)
+
+
+def _render_deskmat_setup_controls() -> None:
+    st.session_state.deskmat_color = st.color_picker("데스크매트", st.session_state.deskmat_color)
+
+
+def _render_generic_asset_controls(asset_id: str, ctx: dict[str, Any]) -> None:
+    assets = {asset["id"]: asset for asset in ctx["fetch_desk_assets"]()}
+    item = assets.get(asset_id, {})
+    st.caption(f"{item.get('category', 'asset')} · {SETUP_ITEM_LABELS.get(asset_id, item.get('label', asset_id))}")
+    if st.button("셋업에서 제거", use_container_width=True):
+        _set_asset_enabled(asset_id, False)
+        st.session_state.selected_setup_item = "keyboard"
+        st.rerun()
 
 
 def _render_ad_content_step(ctx: dict[str, Any]) -> None:
@@ -359,7 +502,8 @@ def _render_ad_content_step(ctx: dict[str, Any]) -> None:
         if providers:
             configured = [item["id"] for item in providers if item.get("configured") and item.get("id") != "fallback"]
             st.caption(f"사용 가능 provider: {', '.join(configured) if configured else 'fallback only'}")
-    ctx["render_copy_experiment_picker"]()
+    if st.session_state.copy_experiment_result:
+        st.caption("생성된 문구 후보는 아래 결과 캔버스의 광고 카드 영역에서 크게 비교할 수 있습니다.")
 
 
 def _operator_mode() -> bool:

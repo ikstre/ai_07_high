@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from .config import get_settings
+from .filenames import unique_timestamped_model_path
 from .renderer import build_uploaded_step_proxy_glb
 
 
@@ -209,19 +210,28 @@ def _run_step_converter(input_path: Path, output_path: Path) -> tuple[bool, str]
     return True, "STEP converted to GLB."
 
 
-def handle_model_upload_bytes(*, filename: str, data: bytes, upload_dir: Path, model_dir: Path, public_base_url: str) -> dict:
+def handle_model_upload_bytes(
+    *,
+    filename: str,
+    data: bytes,
+    upload_dir: Path,
+    model_dir: Path,
+    public_base_url: str,
+    product_name: str | None = None,
+) -> dict:
     suffix = _safe_suffix(filename or "uploaded.step")
     _assert_upload_size(data)
 
     digest = hashlib.sha256(data).hexdigest()[:12]
     upload_dir.mkdir(parents=True, exist_ok=True)
     model_dir.mkdir(parents=True, exist_ok=True)
+    name_source = product_name or Path(filename or "").stem or "uploaded_model"
 
     if suffix == ".glb":
         if not data.startswith(b"glTF"):
             raise ValueError("The uploaded GLB header is invalid.")
-        model_name = f"uploaded_{digest}.glb"
-        output_path = model_dir / model_name
+        output_path = unique_timestamped_model_path(model_dir, name_source, fallback="uploaded_model")
+        model_name = output_path.name
         output_path.write_bytes(data)
         unit_check = glb_unit_check(data)
         message = "Uploaded GLB is ready for the 3D viewer."
@@ -238,11 +248,11 @@ def handle_model_upload_bytes(*, filename: str, data: bytes, upload_dir: Path, m
             "unit_check": unit_check,
         }
 
-    source_name = f"uploaded_{digest}{suffix}"
+    output_path = unique_timestamped_model_path(model_dir, name_source, fallback="uploaded_model")
+    model_name = output_path.name
+    source_name = f"{output_path.stem}{suffix}"
     source_path = upload_dir / source_name
     source_path.write_bytes(data)
-    model_name = f"uploaded_{digest}.glb"
-    output_path = model_dir / model_name
 
     converted, message = _run_step_converter(source_path, output_path)
     if converted:
@@ -275,10 +285,18 @@ def handle_model_upload_bytes(*, filename: str, data: bytes, upload_dir: Path, m
     return proxy_meta
 
 
-def copy_existing_glb(*, source_path: Path, model_dir: Path, public_base_url: str) -> dict:
-    digest = hashlib.sha256(source_path.read_bytes()).hexdigest()[:12]
-    model_name = f"library_{digest}.glb"
-    output_path = model_dir / model_name
-    if not output_path.exists():
-        shutil.copyfile(source_path, output_path)
+def copy_existing_glb(
+    *,
+    source_path: Path,
+    model_dir: Path,
+    public_base_url: str,
+    product_name: str | None = None,
+) -> dict:
+    output_path = unique_timestamped_model_path(
+        model_dir,
+        product_name or source_path.stem,
+        fallback="library_model",
+    )
+    model_name = output_path.name
+    shutil.copyfile(source_path, output_path)
     return {"model_url": f"{public_base_url}/static/models/{model_name}", "model_file": model_name}

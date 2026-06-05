@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from .config import get_settings
+from .filenames import unique_timestamped_model_path
 from .plates import keyboard_layout_repo_path
 
 
@@ -29,12 +30,22 @@ def _plate_source_path(plate: dict) -> Path:
     return source_path
 
 
-def convert_plate_drawing_to_glb(*, plate: dict, model_dir: Path, public_base_url: str) -> dict:
+def convert_plate_drawing_to_glb(
+    *,
+    plate: dict,
+    model_dir: Path,
+    public_base_url: str,
+    product_name: str | None = None,
+) -> dict:
     """플레이트 도면 데이터를 렌더러가 표시할 수 있는 GLB 프록시 모델로 변환한다."""
     source_path = _plate_source_path(plate)
     digest = hashlib.sha256(str(source_path).encode("utf-8") + source_path.read_bytes()).hexdigest()[:12]
-    model_name = f"plate_{plate['id']}_{digest}.glb"
-    output_path = model_dir / model_name
+    output_path = unique_timestamped_model_path(
+        model_dir,
+        product_name or plate.get("name") or plate.get("id") or source_path.stem,
+        fallback=f"plate_{plate.get('id', digest)}",
+    )
+    model_name = output_path.name
 
     if source_path.suffix.lower() == ".glb":
         if not output_path.exists():

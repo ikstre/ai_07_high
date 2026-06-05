@@ -87,6 +87,7 @@ def _file_kind(path: Path) -> str:
 def _file_record(path: Path, *, public_base_url: str, root_config: dict) -> dict:
     root = root_config["root"]
     mime_type, _encoding = mimetypes.guess_type(path.name)
+    stat = path.stat()
     return {
         "name": path.name,
         "path": _library_path(path, root=root, path_prefix=root_config["path_prefix"]),
@@ -96,7 +97,8 @@ def _file_record(path: Path, *, public_base_url: str, root_config: dict) -> dict
         "url": _url_for_path(path, public_base_url=public_base_url, root=root, url_prefix=root_config["url_prefix"]),
         "kind": _file_kind(path),
         "extension": path.suffix.lower(),
-        "size_bytes": path.stat().st_size,
+        "size_bytes": stat.st_size,
+        "modified_at": stat.st_mtime,
         "mime_type": mime_type or "application/octet-stream",
     }
 
