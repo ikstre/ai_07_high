@@ -14,7 +14,6 @@ Idle reaping runs lazily in a background daemon thread after each GPU request.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
@@ -25,6 +24,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+
+try:
+    import fcntl
+except ImportError:  # Windows does not provide fcntl; always_on mode never needs it.
+    fcntl = None
 
 logger = logging.getLogger(__name__)
 
@@ -160,12 +164,15 @@ class _WorkerLock:
             os.fchmod(self._fd.fileno(), 0o600)
         except OSError:
             pass
+        if fcntl is None:
+            return self
         fcntl.flock(self._fd, fcntl.LOCK_EX)
         return self
 
     def __exit__(self, *args) -> None:
         if self._fd:
-            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            if fcntl is not None:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
             self._fd.close()
             self._fd = None
 

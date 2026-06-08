@@ -5,11 +5,7 @@ import base64
 from html import escape
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from fastapi.responses import HTMLResponse
 
 from .ai import (
     IMAGE_JOB_STORE,
@@ -34,22 +30,27 @@ from .quality_gate import (
 from .security import install_secret_log_filter
 
 install_secret_log_filter()
-from .assets import enabled_asset_ids, load_desk_assets
+from .app_factory import create_app, ensure_static_dirs
 from .cad import copy_existing_glb, handle_model_upload_bytes
 from .config import get_settings, redacted_settings
 from .drawing_converter import convert_plate_drawing_to_glb
+from .errors import bad_request, not_found, server_error
 from .filenames import unique_timestamped_model_path
 from .library import (
-    load_reference_manifest,
-    list_library_files,
-    model_compatible_extensions,
     resolve_static_library_path,
-    shared_data_dir,
-    shared_library_status,
-    shared_model_dir,
 )
-from .plates import get_plate, get_plate_preview_path, keyboard_layout_repo_path, list_plate_brands, search_plates
+from .plates import get_plate
 from .renderer import build_desk_setup_scene_glb, build_keyboard_scene_glb
+from .routes import register_routes
+from .schemas import (
+    AdContentRequest,
+    CopyExperimentRequest,
+    DeskSetupRenderRequest,
+    KeyboardRenderRequest,
+    LibraryModelRequest,
+    PlateDrawingRenderRequest,
+    UploadedModelRequest,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -59,116 +60,9 @@ UPLOAD_DIR = STATIC_DIR / "uploads"
 POSTER_DIR = STATIC_DIR / "posters"
 DATA_DIR = BASE_DIR / "data"
 
-for directory in (MODEL_DIR, UPLOAD_DIR, POSTER_DIR):
-    directory.mkdir(parents=True, exist_ok=True)
-
-
-app = FastAPI(title="DeskAd AI Studio API")
-
-_cors_origins = get_settings().cors_origins
-if _cors_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=_cors_origins,
-        allow_credentials=True,
-        allow_methods=["GET", "POST"],
-        allow_headers=["Authorization", "Content-Type"],
-    )
-
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-app.mount("/shared/data", StaticFiles(directory=shared_data_dir(), check_dir=False), name="shared_data")
-app.mount("/shared/models", StaticFiles(directory=shared_model_dir(), check_dir=False), name="shared_models")
-
-
-class KeyboardRenderRequest(BaseModel):
-    """키보드 단품 렌더링 요청에서 공통 색상, 레이아웃, 내부 옵션을 검증한다."""
-    product_name: str = Field(default="커스텀 키보드 셋업", max_length=80)
-    layout: str = Field(default="65")
-    case_color: str = Field(default="#c8c1b2")
-    keycap_color: str = Field(default="#f4ead7")
-    accent_keycap_color: str = Field(default="#6f8faf")
-    deskmat_color: str = Field(default="#1f2937")
-    desk_color: str = Field(default="#d8b892")
-    mouse_color: str = Field(default="#f7f7f2")
-    theme: str = Field(default="minimal")
-    case_finish: str = Field(default="anodized", pattern=r"^(anodized|matte|polycarbonate|wood)$")
-    plate_material: str = Field(default="aluminum", pattern=r"^(aluminum|brass|pom|fr4|carbon|polycarbonate)$")
-    pcb_color: str = Field(default="black", pattern=r"^(black|red|blue|green|white)$")
-    switch_stem: str = Field(default="red", pattern=r"^(red|yellow|brown|blue|clear|silent_red|tactile_purple|linear_black)$")
-    switch_family: str = Field(default="mx", pattern=r"^(mx|box|holy_panda|topre)$")
-    keycap_profile: str = Field(default="cherry", pattern=r"^(cherry|oem|xda|sa|mda)$")
-    mount_type: str = Field(default="top_mount", pattern=r"^(top_mount|tray_mount|gasket_mount|o_ring_mount)$")
-    show_internals: bool = Field(default=True)
-
-
-class DeskSetupRenderRequest(KeyboardRenderRequest):
-    """전체 데스크 셋업 렌더링 요청에서 책상, 모니터, 액세서리 옵션을 검증한다."""
-    assets: list[str] = Field(default_factory=enabled_asset_ids)
-    desk_width: float = Field(default=120.0, ge=100.0, le=200.0)
-    desk_depth: float = Field(default=60.0, ge=50.0, le=90.0)
-    monitor_size: str = Field(default="27", pattern=r"^(24|27|32)$")
-    monitor_arm_style: str = Field(default="single", pattern=r"^(single|double_joint)$")
-    show_internals: bool = Field(default=False)
-
-
-class SelectedCopy(BaseModel):
-    """UI에서 선택한 광고 문구를 포스터/이미지 생성 흐름으로 전달한다."""
-    provider: str = Field(default="selected", max_length=60)
-    headline: str = Field(default="", max_length=80)
-    # 생성 단계(_complete_copy_payload)의 subcopy 캡과 동일하게 180 — 선택 후
-    # 포스터로 round-trip할 때 멀쩡한 문구가 160자에서 잘려 "…"로 줄던 문제 방지.
-    subcopy: str = Field(default="", max_length=180)
-    cta: str = Field(default="", max_length=40)
-    copies: list[str] = Field(default_factory=list, max_length=5)
-    hashtags: list[str] = Field(default_factory=list, max_length=6)
-    spec_bullets: list[str] = Field(default_factory=list, max_length=5)
-
-
-class AdContentRequest(DeskSetupRenderRequest):
-    """광고 문구와 포스터 생성을 위한 상품/타깃/렌더링 정보를 검증한다."""
-    product_name: str = Field(default="크림 베이지 65% 커스텀 키보드", max_length=80)
-    product_type: str = Field(default="커스텀 키보드", max_length=40)
-    price: str = Field(default="189,000원", max_length=30)
-    target_channel: str = Field(default="인스타그램", max_length=30)
-    target_customer: str = Field(default="깔끔한 데스크 셋업을 원하는 직장인", max_length=120)
-    selling_point: str = Field(default="조용한 타건감, 크림 톤 키캡, 작은 책상에도 잘 맞는 65% 배열", max_length=240)
-    ad_tone: str = Field(default="감성형", max_length=30)
-    image_ratio: str = Field(default="1:1", pattern=r"^(1:1|4:5|16:9)$")
-    extra_request: str = Field(default="깔끔하고 고급스러운 데스크셋업 광고 느낌", max_length=400)
-    model_url: str | None = Field(default=None, max_length=400)
-    reference_asset_path: str | None = Field(default=None, max_length=400)
-    image_job_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
-    image_workflow: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
-    poster_template: str = Field(default="minimal_card", pattern=r"^(minimal_card|grid_three|feature_focus|promo_banner)$")
-    selected_copy: SelectedCopy | None = None
-    # 멀티모달 입력(OpenAI식 text+image 동시 입력)용 제품 이미지 — base64 또는 data URL.
-    # 비전 미지원 provider에는 어댑터에서 자동으로 무시(텍스트 강등)된다.
-    reference_image_b64: str | None = Field(default=None, max_length=30_000_000)
-
-
-class UploadedModelRequest(BaseModel):
-    """업로드 모델 파일명과 base64 본문을 검증한다."""
-    filename: str = Field(max_length=255, pattern=r"^[^/\\\x00]+$")
-    content_base64: str = Field(max_length=120_000_000)
-    product_name: str | None = Field(default=None, max_length=80)
-
-
-class LibraryModelRequest(BaseModel):
-    path: str = Field(
-        description="Library path under models/, uploads/reference_drawings/, shared/models/, or shared/data/.",
-        max_length=400,
-    )
-    product_name: str | None = Field(default=None, max_length=80)
-
-
-class CopyExperimentRequest(AdContentRequest):
-    providers: list[str] = Field(default_factory=lambda: ["hyperclova", "kanana", "midm", "local", "fallback"])
-
-
-class PlateDrawingRenderRequest(BaseModel):
-    """키보드 플레이트 도면을 GLB로 변환하기 위한 plate id를 검증한다."""
-    plate_id: str = Field(max_length=120, pattern=r"^[A-Za-z0-9_\-./]+$")
-    product_name: str | None = Field(default=None, max_length=80)
+ensure_static_dirs(MODEL_DIR, UPLOAD_DIR, POSTER_DIR)
+app = create_app(STATIC_DIR)
+register_routes(app)
 
 
 def _settings_base_url() -> str:
@@ -188,7 +82,7 @@ def _selected_plate_or_400(plate_id: str) -> dict:
     """plate id로 카탈로그 항목을 찾고 없으면 400 오류를 발생시킨다."""
     plate = get_plate(plate_id)
     if plate is None:
-        raise HTTPException(status_code=400, detail=f"Plate not found: {plate_id}")
+        raise bad_request(f"Plate not found: {plate_id}")
     return plate
 
 
@@ -202,63 +96,6 @@ def health():
 def security_config():
     """프론트엔드 상태 표시용 마스킹 설정 정보를 반환한다."""
     return redacted_settings()
-
-
-@app.get("/assets/desk")
-def list_desk_assets():
-    """사용 가능한 데스크 액세서리 목록과 기본 선택값을 반환한다."""
-    return {"assets": load_desk_assets(), "default_asset_ids": enabled_asset_ids()}
-
-
-@app.get("/assets/references")
-def list_reference_assets():
-    return {"references": load_reference_manifest(_settings_base_url())}
-
-
-@app.get("/models/library")
-def list_model_library():
-    return {
-        "files": list_library_files(_settings_base_url()),
-        "model_compatible_extensions": model_compatible_extensions(),
-        "shared": shared_library_status(),
-    }
-
-
-@app.get("/layouts")
-def list_layouts():
-    """data/layouts 폴더의 대표 키보드 레이아웃 목록을 반환한다."""
-    layouts = []
-    for path in sorted((DATA_DIR / "layouts").glob("layout_*.json")):
-        layout_id = path.stem.replace("layout_", "")
-        layouts.append({"id": layout_id, "name": f"{layout_id.upper()} Layout"})
-    return {"layouts": layouts}
-
-
-@app.get("/plates")
-def list_plates(query: str = "", brand: str = "", limit: int = 80):
-    """키보드 플레이트 카탈로그를 검색 조건에 맞게 반환한다."""
-    return {
-        "repo_path": str(keyboard_layout_repo_path()) if keyboard_layout_repo_path() else None,
-        "plates": search_plates(query=query, brand=brand, limit=limit),
-    }
-
-
-@app.get("/plates/brands")
-def plate_brands():
-    """플레이트 카탈로그에서 사용 가능한 브랜드 목록을 반환한다."""
-    return {
-        "repo_path": str(keyboard_layout_repo_path()) if keyboard_layout_repo_path() else None,
-        "brands": list_plate_brands(),
-    }
-
-
-@app.get("/plates/{plate_id}/preview")
-def plate_preview(plate_id: str):
-    """선택한 플레이트의 preview 이미지를 static 파일로 반환한다."""
-    preview_path = get_plate_preview_path(plate_id)
-    if preview_path is None or not preview_path.exists():
-        raise HTTPException(status_code=404, detail="Plate preview not found")
-    return FileResponse(preview_path)
 
 
 @app.get("/viewer", response_class=HTMLResponse)
@@ -397,9 +234,9 @@ def render_uploaded_model(request: UploadedModelRequest):
             product_name=request.product_name,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise bad_request(str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {exc}") from exc
+        raise server_error(f"Upload failed: {exc}") from exc
 
 
 @app.post("/render/plate-drawing")
@@ -414,7 +251,7 @@ def render_plate_drawing(request: PlateDrawingRenderRequest):
             product_name=request.product_name,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise bad_request(str(exc)) from exc
 
     return {
         **result,
@@ -454,9 +291,9 @@ def prepare_library_model(request: LibraryModelRequest):
             )
         raise ValueError("Only GLB, STEP, and STP files can be prepared for the 3D viewer.")
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise bad_request(str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Library model preparation failed: {exc}") from exc
+        raise server_error(f"Library model preparation failed: {exc}") from exc
 
 
 @app.get("/ai/providers")
@@ -511,7 +348,7 @@ def create_image_generation_job(request: AdContentRequest, force_regen: bool = F
 def get_image_generation_job(job_id: str):
     job = poll_image_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="Image job not found.")
+        raise not_found("Image job not found.")
     return {"job": job}
 
 
@@ -530,7 +367,7 @@ def list_image_generation_jobs(limit: int = 20):
 def evaluate_image_job_quality(job_id: str):
     job = IMAGE_JOB_STORE.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Image job not found.")
+        raise not_found("Image job not found.")
     if job.get("status") not in {"completed"}:
         return {
             "job_id": job_id,
@@ -546,7 +383,7 @@ def evaluate_image_job_quality(job_id: str):
 def get_image_job_quality(job_id: str):
     report = quality_report_for(job_id)
     if report is None:
-        raise HTTPException(status_code=404, detail="Quality report not found.")
+        raise not_found("Quality report not found.")
     return {"report": report}
 
 
