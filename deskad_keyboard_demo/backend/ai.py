@@ -2011,12 +2011,46 @@ def _workflow_placeholder_mapping(settings, image_prompt: str, width: int, heigh
         "lora_strength": settings.comfyui_lora_strength,
         "controlnet_image": settings.comfyui_controlnet_image,
         "controlnet_strength": settings.comfyui_controlnet_strength,
+        "denoise": settings.comfyui_img2img_denoise,
     }
     mapping: dict = {}
     for key, val in values.items():
         mapping[f"{{{key}}}"] = val      # {key}
         mapping[f"{{{{{key}}}}}"] = val   # {{key}}
     return mapping
+
+
+def _upload_reference_to_comfyui(payload: dict, settings) -> str | None:
+    """선택 도면(래스터 b64)을 ComfyUI `/upload/image`에 올리고 LoadImage용 파일명 반환.
+
+    img2img 워크플로의 ``{reference_image_name}``(LoadImage→VAEEncode) 자리를 채운다.
+    ComfyUI LoadImage는 input 폴더의 파일명만 받으므로 b64를 직접 못 넣는다 → 먼저 업로드.
+    레퍼런스가 없거나 업로드 실패면 None(호출부가 img2img 불가로 처리).
+    """
+    b64 = _reference_image_b64(payload)
+    if not b64:
+        return None
+    try:
+        raw = b64.split(",", 1)[1] if b64.startswith("data:") else b64
+        image_bytes = base64.b64decode(raw)
+    except Exception:
+        return None
+    try:
+        response = requests.post(
+            f"{settings.comfyui_base_url.rstrip('/')}/upload/image",
+            files={"image": ("deskad_reference.png", image_bytes, "image/png")},
+            data={"overwrite": "true"},
+            timeout=settings.request_timeout_seconds,
+        )
+        response.raise_for_status()
+        info = response.json()
+    except Exception:
+        return None
+    name = info.get("name")
+    if not name:
+        return None
+    subfolder = info.get("subfolder")
+    return f"{subfolder}/{name}" if subfolder else name
 
 
 def _load_comfyui_workflow(payload: dict, image_prompt: str) -> dict | None:
@@ -2026,7 +2060,17 @@ def _load_comfyui_workflow(payload: dict, image_prompt: str) -> dict | None:
         return None
     width, height = _image_dimensions(payload)
     mapping = _workflow_placeholder_mapping(settings, image_prompt, width, height)
-    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    # img2img: 워크플로가 {reference_image_name}을 참조하면 선택 도면을 ComfyUI에
+    # 업로드해 그 파일명으로 치환한다. 레퍼런스가 없거나 업로드 실패면 워크플로를
+    # 구동할 입력 이미지가 없으므로 None(호출부가 draft로 처리).
+    if "{reference_image_name}" in workflow_text:
+        uploaded = _upload_reference_to_comfyui(payload, settings)
+        if not uploaded:
+            return None
+        mapping["{reference_image_name}"] = uploaded
+        mapping["{{reference_image_name}}"] = uploaded
+    workflow = json.loads(workflow_text)
     return _replace_workflow_placeholders(workflow, mapping)
 
 
