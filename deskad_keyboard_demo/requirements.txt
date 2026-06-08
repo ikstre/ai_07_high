@@ -4,3 +4,7 @@ streamlit==1.57.0
 requests==2.33.1
 python-dotenv==1.2.2
 python-pptx==1.0.2
+# ppt_export.py(포스터 PPTX/PIL 렌더)·ui/api_client.py가 직접 import — 누락 시 UI 로드 실패
+Pillow==12.2.0
+# backend/schemas.py가 직접 import — fastapi 전이 의존이지만 직접 사용이라 명시 고정
+pydantic==2.13.4

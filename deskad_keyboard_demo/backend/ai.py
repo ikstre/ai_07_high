@@ -1274,7 +1274,16 @@ def _wrap(text: str, width: int, max_lines: int = 3) -> list[str]:
     text = str(text or "")
     if len(text) <= width:
         return [text]
-    lines = textwrap.wrap(text, width=width, break_long_words=False, replace_whitespace=False)
+    wrapped = textwrap.wrap(text, width=width, break_long_words=False, replace_whitespace=False)
+    # break_long_words=False는 공백 없는 긴 토큰(예: 띄어쓰기 없는 한글 headline)을
+    # width를 넘는 한 줄로 그대로 남겨 캔버스 밖으로 넘친다. 단어 경계 wrap 뒤에도
+    # width를 초과하는 줄은 글자수 기준으로 강제 분할하는 폭 가드.
+    lines: list[str] = []
+    for line in wrapped:
+        while len(line) > width:
+            lines.append(line[:width])
+            line = line[width:]
+        lines.append(line)
     if len(lines) <= max_lines:
         return lines
     clipped = lines[:max_lines]
