@@ -51,20 +51,20 @@ GLOBAL_REPLACEMENTS = {
     "임상": "",
 }
 
-# subcopy_max는 포스터 가독성을 위해 상향(이전 30~55 → 46~72). 포스터 SVG가 2~3줄로
-# wrap하므로 과한 "…" 생략을 줄인다. headline/cta도 소폭 여유.
+# subcopy_max는 포스터 가독성과 제품 상세 설명을 함께 맞추기 위해 상향했다.
+# 포스터 SVG가 2~3줄로 wrap하므로 제품 마감/색상/타건감이 정책 단계에서 과하게 잘리는 것을 줄인다.
 CHANNEL_POLICY = {
-    "인스타그램": {"headline_max": 26, "subcopy_max": 60, "cta_max": 14, "hashtag_limit": 6},
-    "스마트스토어": {"headline_max": 28, "subcopy_max": 64, "cta_max": 14, "hashtag_limit": 4},
-    "상세페이지": {"headline_max": 30, "subcopy_max": 72, "cta_max": 16, "hashtag_limit": 3},
-    "쿠팡 썸네일": {"headline_max": 22, "subcopy_max": 48, "cta_max": 12, "hashtag_limit": 0},
-    "배너 광고": {"headline_max": 20, "subcopy_max": 46, "cta_max": 10, "hashtag_limit": 0},
-    "네이버 검색광고": {"headline_max": 18, "subcopy_max": 60, "cta_max": 10, "hashtag_limit": 0},
-    "카카오 채널": {"headline_max": 24, "subcopy_max": 56, "cta_max": 12, "hashtag_limit": 3},
-    "유튜브 쇼츠": {"headline_max": 24, "subcopy_max": 52, "cta_max": 12, "hashtag_limit": 3},
+    "인스타그램": {"headline_max": 28, "subcopy_max": 84, "cta_max": 16, "hashtag_limit": 6},
+    "스마트스토어": {"headline_max": 32, "subcopy_max": 90, "cta_max": 16, "hashtag_limit": 4},
+    "상세페이지": {"headline_max": 34, "subcopy_max": 110, "cta_max": 18, "hashtag_limit": 3},
+    "쿠팡 썸네일": {"headline_max": 24, "subcopy_max": 62, "cta_max": 14, "hashtag_limit": 0},
+    "배너 광고": {"headline_max": 22, "subcopy_max": 58, "cta_max": 12, "hashtag_limit": 0},
+    "네이버 검색광고": {"headline_max": 22, "subcopy_max": 72, "cta_max": 12, "hashtag_limit": 0},
+    "카카오 채널": {"headline_max": 26, "subcopy_max": 72, "cta_max": 14, "hashtag_limit": 3},
+    "유튜브 쇼츠": {"headline_max": 26, "subcopy_max": 64, "cta_max": 14, "hashtag_limit": 3},
 }
 
-DEFAULT_POLICY = {"headline_max": 26, "subcopy_max": 60, "cta_max": 14, "hashtag_limit": 5}
+DEFAULT_POLICY = {"headline_max": 28, "subcopy_max": 84, "cta_max": 16, "hashtag_limit": 5}
 
 # 공백 회피("국내1위", "최 고")까지 잡도록 키의 공백을 \s* 로 바꿔 사전 컴파일한다.
 _REPLACEMENT_PATTERNS = [
@@ -96,8 +96,9 @@ def _sanitize_hashtag(value: object) -> str:
     tag = str(value or "").strip()
     if not tag:
         return ""
-    tag = "#" + tag.lstrip("#")
-    return re.sub(r"\s+", "", tag)
+    body = re.sub(r"\s+", "", tag.lstrip("#"))
+    body = re.sub(r"[^0-9A-Za-z_가-힣ㄱ-ㅎㅏ-ㅣ]", "", body)
+    return f"#{body}" if body else ""
 
 
 def apply_copy_policy(payload: dict, result: dict) -> dict:

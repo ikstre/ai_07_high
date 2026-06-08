@@ -390,7 +390,9 @@ DEFAULTS = {
     "image_quality_report": None,
     "image_polling_enabled": False,
     "image_poll_started_at": None,
-    "image_poll_timeout_seconds": 180,
+    # FLUX 첫 추론(~112s) + exclusive 모드의 텍스트→이미지 워커 스왑/모델 로드까지
+    # 고려하면 180초는 부족 → 자동 갱신을 600초까지 유지.
+    "image_poll_timeout_seconds": 600,
     "ad_tone": "감성형",
     "image_ratio": "1:1",
     "extra_request": "깔끔하고 고급스러운 데스크셋업 광고 느낌",
@@ -1117,7 +1119,8 @@ def prepare_library_model(path: str) -> None:
 
 
 def generate_copy() -> None:
-    st.session_state.copy_result = api_post("/ai/copy", build_ad_payload(), timeout=45)
+    # HyperCLOVA/로컬 LLM(Ollama)은 첫 응답까지 수십 초 걸릴 수 있어 클라이언트 타임아웃을 넉넉히.
+    st.session_state.copy_result = api_post("/ai/copy", build_ad_payload(), timeout=180)
     st.session_state.copy_selected_provider = st.session_state.copy_result.get("provider")
 
 
@@ -1130,20 +1133,22 @@ def generate_copy_experiment() -> None:
     if "fallback" not in providers:
         providers.append("fallback")
     payload = {**build_ad_payload(), "providers": providers or ["fallback"]}
-    st.session_state.copy_experiment_result = api_post("/ai/copy/experiment", payload, timeout=90)
+    st.session_state.copy_experiment_result = api_post("/ai/copy/experiment", payload, timeout=300)
     st.session_state.copy_result = None
     st.session_state.copy_selected_provider = None
 
 
 def generate_poster() -> None:
-    data = api_post("/ai/poster", build_ad_payload(), timeout=60)
+    # 카피 생성(LLM) + 이미지 참조까지 포함 → 넉넉한 타임아웃.
+    data = api_post("/ai/poster", build_ad_payload(), timeout=300)
     st.session_state.poster_result = data
     st.session_state.copy_result = data["copy"]
     st.session_state.copy_selected_provider = data["copy"].get("provider")
 
 
 def generate_image_job() -> None:
-    data = api_post("/ai/image/jobs", build_ad_payload(), timeout=60)
+    # 작업 등록 전에 카피 생성(LLM)이 선행될 수 있어 타임아웃 상향.
+    data = api_post("/ai/image/jobs", build_ad_payload(), timeout=180)
     st.session_state.image_job_result = data
     copy_result = data.get("copy") if isinstance(data, dict) else None
     if isinstance(copy_result, dict):
@@ -1259,9 +1264,14 @@ def render_copy_experiment_picker() -> None:
                     st.markdown(f"##### {copy.get('headline') or '제목 없음'}")
                     if copy.get("subcopy"):
                         st.write(copy["subcopy"])
-                    bullets = list(copy.get("copies") or [])[:4]
+                    bullets = list(copy.get("copies") or [])[:5]
                     if bullets:
                         for line in bullets:
+                            st.write(f"- {line}")
+                    specs = list(copy.get("spec_bullets") or [])[:5]
+                    if specs:
+                        st.caption("주요 특징")
+                        for line in specs:
                             st.write(f"- {line}")
                     hashtags = " ".join((copy.get("hashtags") or [])[:6])
                     if hashtags:
@@ -1578,7 +1588,7 @@ with st.container(border=True):
             subcopy = result.get("subcopy") or st.session_state.selling_point
             cta = result.get("cta") or "자세히 보기"
             copies = result.get("copies") or []
-            bullet_html = "".join(f"<li>{html.escape(str(copy))}</li>" for copy in copies[:3])
+            bullet_html = "".join(f"<li>{html.escape(str(copy))}</li>" for copy in copies[:5])
             if not bullet_html:
                 bullet_html = f"<li>{html.escape(st.session_state.selling_point)}</li>"
             st.markdown(
@@ -1599,8 +1609,10 @@ with st.container(border=True):
             if result:
                 st.caption(f"선택 provider: {provider_label(st.session_state.get('copy_selected_provider') or result.get('provider'))}")
                 render_copy_inline_editor(result)
-                for copy in result.get("copies", [])[:3]:
+                for copy in result.get("copies", [])[:5]:
                     st.write(f"- {copy}")
+                for spec in result.get("spec_bullets", [])[:5]:
+                    st.caption(f"특징: {spec}")
                 st.caption(" ".join(result.get("hashtags", [])))
                 if result.get("error"):
                     st.caption(f"fallback note: {result['error']}")

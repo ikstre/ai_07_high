@@ -101,6 +101,7 @@ def test_post_with_retry_exhausts_connection_errors(monkeypatch):
 
 
 def test_chat_adapter_passes_custom_messages_and_temperature(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_TOKENS", "1536")
     session = _patch_session(monkeypatch, FakeSession([FakeResponse(200)]))
     messages = [
         {"role": "system", "content": "system"},
@@ -122,3 +123,4 @@ def test_chat_adapter_passes_custom_messages_and_temperature(monkeypatch):
     assert content == "{}"
     assert body["messages"] == messages
     assert body["temperature"] == 0.45
+    assert body["max_tokens"] == 1536

@@ -157,6 +157,12 @@ def make_text_cache_key(payload: dict, provider_id: str, model_id: str, policy_v
         "mount_type": payload.get("mount_type", ""),
         "pcb_color": payload.get("pcb_color", ""),
         "monitor_size": payload.get("monitor_size", ""),
+        # 배열·색상은 카피 컨텍스트(build_*_prompt)에 들어가므로 키에 포함해야
+        # "배열/색만 바꿔도 옛 카피가 캐시 히트" 회귀를 막는다.
+        "layout": payload.get("layout", ""),
+        "case_color": payload.get("case_color", ""),
+        "keycap_color": payload.get("keycap_color", ""),
+        "accent_keycap_color": payload.get("accent_keycap_color", ""),
         "provider": provider_id,
         "model": model_id,
         "policy": policy_version,
@@ -176,6 +182,10 @@ def make_image_cache_key(
 
     Seed is intentionally excluded — the same prompt+workflow always returns
     the cached image. Callers pass force_regen=True to bypass the cache.
+
+    layout·case/keycap/accent 색상은 build_image_prompt가 image_prompt 문자열에
+    그대로 녹여 넣으므로(배열/색이 바뀌면 prompt가 바뀜) 이 키가 이미 그 변화를
+    반영한다 — 별도 필드로 중복 추가하지 않는다(make_text_cache_key와 대비).
     """
     model_config = json.dumps(
         {
@@ -249,7 +259,7 @@ def put_image_cache(cache_key: str, job: dict) -> None:
     try:
         _image_cache_dir().mkdir(parents=True, exist_ok=True)
         path = _image_cache_dir() / f"{cache_key}.json"
-        safe = {k: v for k, v in job.items() if k not in ("image_b64",)}
+        safe = {k: v for k, v in job.items() if k not in ("image_b64", "image_b64s")}
         path.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
         path.chmod(0o600)
     except Exception:

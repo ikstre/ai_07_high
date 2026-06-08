@@ -21,6 +21,7 @@ from .ai import (
     generate_image_reference as generate_ai_image_reference,
     image_reference_from_job,
     poll_image_job,
+    public_image_job,
     safe_image_reference,
     save_poster_svg,
     selected_copy_or_generate,
@@ -114,7 +115,9 @@ class SelectedCopy(BaseModel):
     """UI에서 선택한 광고 문구를 포스터/이미지 생성 흐름으로 전달한다."""
     provider: str = Field(default="selected", max_length=60)
     headline: str = Field(default="", max_length=80)
-    subcopy: str = Field(default="", max_length=160)
+    # 생성 단계(_complete_copy_payload)의 subcopy 캡과 동일하게 180 — 선택 후
+    # 포스터로 round-trip할 때 멀쩡한 문구가 160자에서 잘려 "…"로 줄던 문제 방지.
+    subcopy: str = Field(default="", max_length=180)
     cta: str = Field(default="", max_length=40)
     copies: list[str] = Field(default_factory=list, max_length=5)
     hashtags: list[str] = Field(default_factory=list, max_length=6)
@@ -138,6 +141,9 @@ class AdContentRequest(DeskSetupRenderRequest):
     image_workflow: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
     poster_template: str = Field(default="minimal_card", pattern=r"^(minimal_card|grid_three|feature_focus|promo_banner)$")
     selected_copy: SelectedCopy | None = None
+    # 멀티모달 입력(OpenAI식 text+image 동시 입력)용 제품 이미지 — base64 또는 data URL.
+    # 비전 미지원 provider에는 어댑터에서 자동으로 무시(텍스트 강등)된다.
+    reference_image_b64: str | None = Field(default=None, max_length=30_000_000)
 
 
 class UploadedModelRequest(BaseModel):
@@ -513,7 +519,11 @@ def get_image_generation_job(job_id: str):
 def list_image_generation_jobs(limit: int = 20):
     items = list(IMAGE_JOB_STORE.all().values())
     items.sort(key=lambda record: record.get("created_at", 0), reverse=True)
-    return {"jobs": items[: max(1, min(limit, 200))], "store_path": str(IMAGE_JOB_STORE.path)}
+    capped = items[: max(1, min(limit, 200))]
+    # 목록에선 이미지 바이트(local_image_reference.image_b64/_b64s) 제외 — 수십 MB 응답 방지.
+    # 실제 바이트는 단건 조회(/ai/image/jobs/{id})에서만 내려간다.
+    jobs = [public_image_job(job) for job in capped]
+    return {"jobs": jobs, "store_path": str(IMAGE_JOB_STORE.path)}
 
 
 @app.post("/ai/image/jobs/{job_id}/quality")
@@ -559,13 +569,18 @@ def generate_poster(request: AdContentRequest):
         image_reference = generate_ai_image_reference(payload, image_prompt)
 
     image_b64 = None
+    image_b64s = None
     if isinstance(image_reference, dict) and image_reference.get("has_image"):
         image_b64 = image_reference.get("image_b64")
+        raw_image_b64s = image_reference.get("image_b64s")
+        if isinstance(raw_image_b64s, list):
+            image_b64s = [item for item in raw_image_b64s if isinstance(item, str) and item][:3]
     poster_meta = save_poster_svg(
         payload=payload,
         copy_result=copy_result,
         poster_dir=POSTER_DIR,
         image_b64=image_b64,
+        image_b64s=image_b64s,
     )
 
     safe_reference = safe_image_reference(image_reference)
@@ -578,5 +593,6 @@ def generate_poster(request: AdContentRequest):
         "poster_template": payload.get("poster_template", "minimal_card"),
         "image_reference": safe_reference,
         "image_job_id": request.image_job_id,
-        "image_embedded": bool(image_b64),
+        "image_embedded": bool(image_b64 or image_b64s),
+        "image_count": len(image_b64s) if image_b64s else (1 if image_b64 else 0),
     }

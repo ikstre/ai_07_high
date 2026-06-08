@@ -35,10 +35,10 @@ def test_youtube_shorts_policy_limits_lengths_and_hashtags():
     )
 
     assert output["policy"]["channel"] == "유튜브 쇼츠"
-    assert output["policy"]["headline_max"] == 24
-    assert len(output["headline"]) <= 24
-    assert len(output["subcopy"]) <= 52
-    assert len(output["cta"]) <= 12
+    assert output["policy"]["headline_max"] == 26
+    assert len(output["headline"]) <= 26
+    assert len(output["subcopy"]) <= 64
+    assert len(output["cta"]) <= 14
     assert output["hashtags"] == ["#DeskSetup", "#키보드", "#커스텀키보드"]
 
 
@@ -47,3 +47,12 @@ def test_channel_specific_zero_hashtag_limit():
 
     assert output["policy"]["hashtag_limit"] == 0
     assert output["hashtags"] == []
+
+
+def test_hashtags_keep_korean_english_and_numbers_only():
+    output = apply_copy_policy(
+        {"target_channel": "인스타그램"},
+        _copy_result(hashtags=["#Desk Setup", "#키보드65", "#侘寂", "#desk_set"]),
+    )
+
+    assert output["hashtags"] == ["#DeskSetup", "#키보드65", "#desk_set"]

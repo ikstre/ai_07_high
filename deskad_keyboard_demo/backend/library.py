@@ -191,6 +191,41 @@ def resolve_static_library_path(relative_path: str) -> Path:
     raise ValueError("Library path must start with models/, uploads/reference_drawings/, shared/models/, or shared/data/.")
 
 
+RASTER_REFERENCE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def resolve_reference_asset(relative_path: str | None) -> Path | None:
+    """선택한 공용 도면/레퍼런스 경로를 실제 파일 경로로 해석한다(없으면 None)."""
+    if not relative_path:
+        return None
+    try:
+        return resolve_static_library_path(relative_path)
+    except ValueError:
+        return None
+
+
+def reference_asset_label(relative_path: str | None) -> str:
+    """파일명을 사람이 읽는 라벨로 변환한다(예: tsuki_kle_layout.png → tsuki kle layout)."""
+    if not relative_path:
+        return ""
+    return Path(relative_path).stem.replace("_", " ").replace("-", " ").strip()
+
+
+def reference_asset_descriptor(relative_path: str | None) -> dict | None:
+    """이미지 프롬프트/멀티모달 경로에서 함께 쓸 레퍼런스 메타데이터를 만든다."""
+    path = resolve_reference_asset(relative_path)
+    if path is None:
+        return None
+    suffix = path.suffix.lower()
+    return {
+        "path": path,
+        "label": reference_asset_label(relative_path) or path.name,
+        "kind": _file_kind(path),
+        "extension": suffix,
+        "is_raster": suffix in RASTER_REFERENCE_EXTENSIONS,
+    }
+
+
 def model_compatible_extensions() -> list[str]:
     return sorted(MODEL_EXTENSIONS)
 
