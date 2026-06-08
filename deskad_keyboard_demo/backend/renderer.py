@@ -73,6 +73,7 @@ class GlbBuilder:
         material: int,
         taper: float = 0.0,
         rotation_x: float = 0.0,
+        rotation_z: float = 0.0,
     ) -> None:
         cx, cy, cz = center
         sx, sy, sz = size
@@ -106,16 +107,22 @@ class GlbBuilder:
         start_index = len(self.indices)
         cos_rx = math.cos(rotation_x)
         sin_rx = math.sin(rotation_x)
+        cos_rz = math.cos(rotation_z)
+        sin_rz = math.sin(rotation_z)
 
         for face in faces:
             normal = face[4]
             nx, ny, nz = normal
-            rotated_normal = (nx, ny * cos_rx - nz * sin_rx, ny * sin_rx + nz * cos_rx)
+            rny = ny * cos_rx - nz * sin_rx
+            rnz = ny * sin_rx + nz * cos_rx
+            rotated_normal = (nx * cos_rz - rny * sin_rz, nx * sin_rz + rny * cos_rz, rnz)
             for vertex_index in face[:4]:
                 x, y, z = vertices[vertex_index]
                 ry = y * cos_rx - z * sin_rx
                 rz = y * sin_rx + z * cos_rx
-                self.positions.extend([x + cx, ry + cy, rz + cz])
+                rx = x * cos_rz - ry * sin_rz
+                ryy = x * sin_rz + ry * cos_rz
+                self.positions.extend([rx + cx, ryy + cy, rz + cz])
                 self.normals.extend(rotated_normal)
 
         for face_i in range(len(faces)):
@@ -1230,17 +1237,29 @@ def _add_monitor_arm(
 
 def _add_desk_lamp(builder: GlbBuilder, *, center: tuple[float, float], body_mat: int, light_mat: int, arm_dir: float = 1.0) -> None:
     x, z = center
-    arm_x = x + arm_dir * 9.0
-    shade_x = x + arm_dir * 19.0
+    arm_length = 14.0
+    arm_angle = math.radians(35)
+    arm_dx = math.cos(arm_angle) * arm_length
+    arm_dy = math.sin(arm_angle) * arm_length
+    arm_x = x + arm_dir * (arm_dx / 2)
+    arm_y = SURFACE_Y + 27.0 + arm_dy / 2
+    shade_x = x + arm_dir * arm_dx
+    shade_y = SURFACE_Y + 27.0 + arm_dy - 3.0
+    upper_joint_offset = arm_length - 0.5
+    upper_joint_x = x + arm_dir * math.cos(arm_angle) * upper_joint_offset
+    upper_joint_y = SURFACE_Y + 27.0 + math.sin(arm_angle) * upper_joint_offset
+    upper_y = SURFACE_Y + 27.0
+    arm_z = z - 4.0
     builder.add_cylinder_y("lamp round base", (x, _surface_center_y(1.4), z), 7.0, 1.4, body_mat, radius_z=7.0, segments=28)
     builder.add_cylinder_y("lamp base highlight", (x, _surface_center_y(1.4) + 0.7, z), 7.05, 0.05, light_mat, radius_z=7.05, segments=28)
     builder.add_cylinder_y("lamp lower arm", (x, SURFACE_Y + 14.0, z), 0.85, 27.0, body_mat, radius_z=0.85, segments=18)
-    builder.add_sphere("lamp lower joint", (x, SURFACE_Y + 27.0, z), 1.1, body_mat, rings=10, segments=18)
-    builder.add_box("lamp upper arm", (arm_x, SURFACE_Y + 27.0, z - 4.0), (19.0, 1.4, 1.4), body_mat, taper=0.08)
-    builder.add_sphere("lamp upper joint", (arm_x + arm_dir * 8.5, SURFACE_Y + 27.0, z - 4.0), 1.1, body_mat, rings=10, segments=18)
+    builder.add_sphere("lamp lower joint", (x, upper_y, z), 1.1, body_mat, rings=10, segments=18)
+    builder.add_box("lamp elbow link", (x, upper_y, (z + arm_z) / 2), (1.4, 1.4, abs(z - arm_z) + 1.4), body_mat, taper=0.08)
+    builder.add_box("lamp upper arm", (arm_x, arm_y, arm_z), (arm_length, 1.4, 1.4), body_mat, taper=0.08, rotation_z=arm_dir * arm_angle)
+    builder.add_sphere("lamp upper joint", (upper_joint_x, upper_joint_y, arm_z), 1.1, body_mat, rings=10, segments=18)
     builder.add_cylinder_y(
         "lamp tapered shade",
-        (shade_x, SURFACE_Y + 24.0, z - 4.0),
+        (shade_x, shade_y, arm_z),
         7.2,
         6.4,
         body_mat,
@@ -1249,7 +1268,7 @@ def _add_desk_lamp(builder: GlbBuilder, *, center: tuple[float, float], body_mat
         top_radius_z=4.0,
         segments=28,
     )
-    builder.add_cylinder_y("lamp warm light", (shade_x, SURFACE_Y + 20.6, z - 4.0), 4.6, 0.30, light_mat, radius_z=4.6, segments=28)
+    builder.add_cylinder_y("lamp warm light", (shade_x, shade_y - 3.4, arm_z), 4.6, 0.30, light_mat, radius_z=4.6, segments=28)
 
 
 def _add_plant(builder: GlbBuilder, *, center: tuple[float, float], pot_mat: int, leaf_mat: int, soil_mat: int) -> None:

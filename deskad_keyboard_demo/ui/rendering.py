@@ -102,3 +102,5 @@ def prepare_library_model(path: str) -> None:
     data = api_post("/models/library/prepare", {"path": path, "product_name": st.session_state.product_name}, timeout=45)
     st.session_state.uploaded_model_url = data["model_url"]
     st.session_state.uploaded_model_meta = data
+    st.session_state.model_url = data["model_url"]
+    st.session_state.model_meta = data
