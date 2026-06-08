@@ -1,4 +1,4 @@
-"""Step-specific Streamlit input panels for DeskAd AI Studio."""
+"""DeskAd AI Studio의 단계별 Streamlit 입력 패널을 렌더링한다."""
 from __future__ import annotations
 
 import os
@@ -46,6 +46,36 @@ SETUP_ITEM_LABELS = {
 
 def _option_index(options: list[str], value: str, default: int = 0) -> int:
     return options.index(value) if value in options else default
+
+
+def _render_button_choice(label: str, options: list[str], state_key: str, columns: int = 3) -> None:
+    st.caption(label)
+    cols = st.columns(columns)
+    current = st.session_state.get(state_key, options[0])
+    for index, option in enumerate(options):
+        button_type = "primary" if option == current else "secondary"
+        with cols[index % columns]:
+            if st.button(option, type=button_type, use_container_width=True, key=f"{state_key}_{option}"):
+                st.session_state[state_key] = option
+                st.rerun()
+
+
+def _render_poster_template_cards(ctx: dict[str, Any]) -> None:
+    st.caption("포스터 템플릿")
+    labels = ctx["POSTER_TEMPLATE_LABELS"]
+    thumbnails = ctx["POSTER_TEMPLATE_THUMBNAILS"]
+    cols = st.columns(2)
+    for index, (key, label) in enumerate(labels.items()):
+        selected = key == st.session_state.poster_template
+        with cols[index % 2]:
+            with st.container(border=True):
+                button_type = "primary" if selected else "secondary"
+                if st.button(label, type=button_type, use_container_width=True, key=f"poster_template_{key}"):
+                    st.session_state.poster_template = key
+                    st.rerun()
+                thumb = thumbnails.get(key)
+                if thumb:
+                    st.markdown(thumb, unsafe_allow_html=True)
 
 
 def _asset_enabled(asset_id: str) -> bool:
@@ -337,46 +367,47 @@ def _render_keyboard_setup_controls(ctx: dict[str, Any]) -> None:
         st.session_state.keycap_color = st.color_picker("키캡", st.session_state.keycap_color)
     with color_c:
         st.session_state.accent_keycap_color = st.color_picker("포인트 키", st.session_state.accent_keycap_color)
-    detail_a, detail_b = st.columns(2)
-    with detail_a:
-        st.session_state.case_finish = st.selectbox(
-            "케이스 마감",
-            list(ctx["CASE_FINISH_LABELS"].keys()),
-            index=list(ctx["CASE_FINISH_LABELS"].keys()).index(st.session_state.case_finish),
-            format_func=lambda k: ctx["CASE_FINISH_LABELS"][k],
-        )
-        st.session_state.switch_family = st.selectbox(
-            "스위치 구조",
-            list(ctx["SWITCH_FAMILY_LABELS"].keys()),
-            index=list(ctx["SWITCH_FAMILY_LABELS"].keys()).index(st.session_state.switch_family),
-            format_func=lambda k: ctx["SWITCH_FAMILY_LABELS"][k],
-        )
-        st.session_state.keycap_profile = st.selectbox(
-            "키캡 프로파일",
-            list(ctx["KEYCAP_PROFILE_LABELS"].keys()),
-            index=list(ctx["KEYCAP_PROFILE_LABELS"].keys()).index(st.session_state.keycap_profile),
-            format_func=lambda k: ctx["KEYCAP_PROFILE_LABELS"][k],
-        )
-    with detail_b:
-        st.session_state.plate_material = st.selectbox(
-            "보강판 재질",
-            list(ctx["PLATE_MATERIAL_LABELS"].keys()),
-            index=list(ctx["PLATE_MATERIAL_LABELS"].keys()).index(st.session_state.plate_material),
-            format_func=lambda k: ctx["PLATE_MATERIAL_LABELS"][k],
-        )
-        st.session_state.switch_stem = st.selectbox(
-            "스위치 stem",
-            list(ctx["SWITCH_STEM_LABELS"].keys()),
-            index=list(ctx["SWITCH_STEM_LABELS"].keys()).index(st.session_state.switch_stem),
-            format_func=lambda k: ctx["SWITCH_STEM_LABELS"][k],
-        )
-        st.session_state.mount_type = st.selectbox(
-            "마운트 방식",
-            list(ctx["MOUNT_TYPE_LABELS"].keys()),
-            index=list(ctx["MOUNT_TYPE_LABELS"].keys()).index(st.session_state.mount_type),
-            format_func=lambda k: ctx["MOUNT_TYPE_LABELS"][k],
-        )
-    st.session_state.show_internals = st.checkbox("내부 구조 렌더 노출", value=st.session_state.show_internals)
+    with st.expander("고급 키보드 옵션", expanded=False):
+        detail_a, detail_b = st.columns(2)
+        with detail_a:
+            st.session_state.case_finish = st.selectbox(
+                "케이스 마감",
+                list(ctx["CASE_FINISH_LABELS"].keys()),
+                index=list(ctx["CASE_FINISH_LABELS"].keys()).index(st.session_state.case_finish),
+                format_func=lambda k: ctx["CASE_FINISH_LABELS"][k],
+            )
+            st.session_state.switch_family = st.selectbox(
+                "스위치 구조",
+                list(ctx["SWITCH_FAMILY_LABELS"].keys()),
+                index=list(ctx["SWITCH_FAMILY_LABELS"].keys()).index(st.session_state.switch_family),
+                format_func=lambda k: ctx["SWITCH_FAMILY_LABELS"][k],
+            )
+            st.session_state.keycap_profile = st.selectbox(
+                "키캡 프로파일",
+                list(ctx["KEYCAP_PROFILE_LABELS"].keys()),
+                index=list(ctx["KEYCAP_PROFILE_LABELS"].keys()).index(st.session_state.keycap_profile),
+                format_func=lambda k: ctx["KEYCAP_PROFILE_LABELS"][k],
+            )
+        with detail_b:
+            st.session_state.plate_material = st.selectbox(
+                "보강판 재질",
+                list(ctx["PLATE_MATERIAL_LABELS"].keys()),
+                index=list(ctx["PLATE_MATERIAL_LABELS"].keys()).index(st.session_state.plate_material),
+                format_func=lambda k: ctx["PLATE_MATERIAL_LABELS"][k],
+            )
+            st.session_state.switch_stem = st.selectbox(
+                "스위치 stem",
+                list(ctx["SWITCH_STEM_LABELS"].keys()),
+                index=list(ctx["SWITCH_STEM_LABELS"].keys()).index(st.session_state.switch_stem),
+                format_func=lambda k: ctx["SWITCH_STEM_LABELS"][k],
+            )
+            st.session_state.mount_type = st.selectbox(
+                "마운트 방식",
+                list(ctx["MOUNT_TYPE_LABELS"].keys()),
+                index=list(ctx["MOUNT_TYPE_LABELS"].keys()).index(st.session_state.mount_type),
+                format_func=lambda k: ctx["MOUNT_TYPE_LABELS"][k],
+            )
+        st.session_state.show_internals = st.checkbox("내부 구조 렌더 노출", value=st.session_state.show_internals)
 
 
 def _render_desk_setup_controls() -> None:
@@ -449,27 +480,12 @@ def _render_generic_asset_controls(asset_id: str, ctx: dict[str, Any]) -> None:
 
 def _render_ad_content_step(ctx: dict[str, Any]) -> None:
     st.markdown("#### 광고 콘텐츠")
-    ad_a, ad_b = st.columns(2)
+    ad_a, ad_b = st.columns([0.30, 0.70])
     with ad_a:
-        st.session_state.ad_tone = st.selectbox(
-            "광고 톤",
-            AD_TONE_OPTIONS,
-            index=_option_index(AD_TONE_OPTIONS, st.session_state.ad_tone),
-        )
-        st.session_state.image_ratio = st.selectbox(
-            "이미지 비율",
-            IMAGE_RATIO_OPTIONS,
-            index=_option_index(IMAGE_RATIO_OPTIONS, st.session_state.image_ratio),
-        )
+        _render_button_choice("광고 톤", AD_TONE_OPTIONS, "ad_tone", columns=2)
+        _render_button_choice("이미지 비율", IMAGE_RATIO_OPTIONS, "image_ratio", columns=3)
     with ad_b:
-        poster_template_labels = ctx["POSTER_TEMPLATE_LABELS"]
-        st.session_state.poster_template = st.selectbox(
-            "포스터 템플릿",
-            options=list(poster_template_labels.keys()),
-            index=list(poster_template_labels.keys()).index(st.session_state.poster_template),
-            format_func=lambda k: poster_template_labels[k],
-        )
-        ctx["render_poster_template_thumbnails"](st.session_state.poster_template)
+        _render_poster_template_cards(ctx)
         if _operator_mode():
             _render_ai_status(ctx["fetch_security_config"]())
     st.session_state.extra_request = st.text_area("추가 요청", st.session_state.extra_request, height=110)

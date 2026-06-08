@@ -489,11 +489,21 @@ def render_ui_theme_styles(theme_mode: str | None) -> None:
             border-color: {tokens["border"]};
             background: {tokens["surface"]};
             color: {tokens["text"]};
+            border-radius: 8px !important;
+            min-width: 100%;
+          }}
+          .stButton > button p {{
+            white-space: normal !important;
+            word-break: keep-all !important;
+            overflow-wrap: normal !important;
+            line-height: 1.35 !important;
+            text-align: center;
           }}
           .stButton > button[kind="primary"] {{
             border-color: #ef4444;
             background: #ef4444;
             color: #ffffff;
+            border-radius: 8px !important;
           }}
           .section-label {{
             color: {tokens["subtle"]};
