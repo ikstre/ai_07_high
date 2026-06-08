@@ -38,6 +38,7 @@ DEFAULTS = {
     "desk_depth": 60.0,
     "monitor_size": "27",
     "asset_selection": ["mouse", "monitor", "monitor_arm", "desk_lamp", "plant"],
+    "selected_setup_item": "keyboard",
     "camera": "perspective",
     "model_url": None,
     "model_meta": None,
