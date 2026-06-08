@@ -82,6 +82,10 @@ def _text_health_url() -> str:
     return _env("TEXT_WORKER_HEALTH_URL", "http://127.0.0.1:11501/health")
 
 
+def _text_startup_timeout_seconds() -> int:
+    return _int_env("TEXT_WORKER_STARTUP_TIMEOUT_SECONDS", 60)
+
+
 def _image_service() -> str:
     return _env("IMAGE_WORKER_SERVICE", "comfyui")
 
@@ -195,12 +199,14 @@ def _start_text_worker_locked() -> bool:
         state = _load_state()
         state["text_pid"] = proc.pid
         _save_state(state)
-        for _ in range(20):
-            time.sleep(3)
+        poll_interval = 3
+        attempts = max(1, _text_startup_timeout_seconds() // poll_interval)
+        for _ in range(attempts):
+            time.sleep(poll_interval)
             if is_text_worker_up():
                 logger.info("Text worker ready")
                 return True
-        logger.warning("Text worker did not become healthy within 60 s")
+        logger.warning("Text worker did not become healthy within %s s", attempts * poll_interval)
         return False
     except Exception as exc:
         logger.error("Failed to start text worker: %s", exc)
@@ -398,10 +404,15 @@ def reap_idle_workers() -> None:
         return
 
     timeout = idle_timeout_seconds()
-    now = int(time.time())
-    state = _load_state()
 
+    # idle 판정~stop을 모두 락 안에서 수행한다. state를 락 밖에서 읽으면, 읽은 시점과
+    # 락 획득 사이에 ensure_*_worker가 작업 시작과 함께 *_last_used를 갱신(이 갱신도
+    # 락 안에서 일어남)해도 그 갱신을 못 보고 stale 스냅샷으로 idle 판정 → 막 작업을
+    # 시작한 워커에 SIGTERM을 보내는 race가 생긴다. 락 안에서 읽으면 가장 최신
+    # last_used를 보게 되어 그 race가 사라진다.
     with _WorkerLock():
+        state = _load_state()
+        now = int(time.time())
         text_idle = now - int(state.get("text_last_used", 0))
         if text_idle > timeout and is_text_worker_up():
             logger.info("Text worker idle %ds > %ds — stopping", text_idle, timeout)

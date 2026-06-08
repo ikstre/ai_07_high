@@ -5,6 +5,7 @@ Usage:
   python tools/scan_secrets.py                     # scan staged changes
   python tools/scan_secrets.py path1 path2 ...     # scan given files/dirs
   python tools/scan_secrets.py --all               # scan tracked files
+  python tools/scan_secrets.py --tree              # tracked + untracked (not gitignored)
 
 Exit code:
   0 - clean
@@ -75,6 +76,12 @@ PLACEHOLDER_VALUES = {
     "<redacted>",
 }
 
+# is_sensitive_key matches any key containing TOKEN/API_KEY/SECRET/PASSWORD, which
+# also catches numeric config like LLM_MAX_TOKENS / *_MAX_NEW_TOKENS. A credential
+# is never a bare number or boolean, so those values are not findings (keeps the
+# always-run tree hook from blocking every commit on benign tuning knobs).
+_NON_SECRET_VALUE = re.compile(r"^(?:\d+(?:\.\d+)?|true|false|yes|no|on|off)$", re.IGNORECASE)
+
 
 def _git(*args: str) -> str:
     result = subprocess.run(
@@ -97,6 +104,23 @@ def _tracked_files() -> list[Path]:
     return [REPO_ROOT / line for line in out.splitlines() if line]
 
 
+def _tree_files() -> list[Path]:
+    """Tracked + untracked-but-not-ignored files (the full working tree view).
+
+    `git ls-files` alone misses untracked files (e.g. a stray key dropped into
+    the repo without `git add`), so we union it with `--others
+    --exclude-standard`. Gitignored paths stay excluded — they never enter a
+    commit and are the user's local-only space.
+    """
+    tracked = _git("ls-files").splitlines()
+    untracked = _git("ls-files", "--others", "--exclude-standard").splitlines()
+    seen: list[Path] = []
+    for line in (*tracked, *untracked):
+        if line:
+            seen.append(REPO_ROOT / line)
+    return seen
+
+
 def _expand_targets(targets: list[Path]) -> list[Path]:
     files: list[Path] = []
     for target in targets:
@@ -110,7 +134,13 @@ def _expand_targets(targets: list[Path]) -> list[Path]:
 
 
 def _should_skip(path: Path) -> bool:
-    rel = path.resolve().relative_to(REPO_ROOT) if path.is_absolute() else path
+    if path.is_absolute():
+        try:
+            rel = path.resolve().relative_to(REPO_ROOT)
+        except ValueError:
+            return False  # outside the repo (explicit path arg) — scan it anyway
+    else:
+        rel = path
     for part in rel.parts:
         if part in SKIP_DIRS:
             return True
@@ -130,7 +160,7 @@ def _scan_text(text: str, *, is_env_file: bool) -> list[tuple[int, str]]:
             match = KV_LINE.match(line)
             if match and is_sensitive_key(match.group("key")):
                 value = match.group("value").strip().strip('"').strip("'")
-                if value and value not in PLACEHOLDER_VALUES:
+                if value and value not in PLACEHOLDER_VALUES and not _NON_SECRET_VALUE.match(value):
                     findings.append((line_no, f"env value for {match.group('key')}"))
                     continue
         for pattern in _TOKEN_SHAPED_PATTERNS:
@@ -160,12 +190,21 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Scan files for accidental secrets.")
     parser.add_argument("paths", nargs="*", help="Files or dirs. Default: staged changes.")
     parser.add_argument("--all", action="store_true", help="Scan every tracked file.")
+    parser.add_argument(
+        "--tree",
+        action="store_true",
+        help="Scan tracked + untracked (non-gitignored) files — full working tree.",
+    )
     args = parser.parse_args(argv)
 
-    if args.all and args.paths:
-        parser.error("--all cannot be combined with explicit paths")
+    if args.all and args.tree:
+        parser.error("--all and --tree are mutually exclusive")
+    if (args.all or args.tree) and args.paths:
+        parser.error("--all/--tree cannot be combined with explicit paths")
 
-    if args.all:
+    if args.tree:
+        candidates = _tree_files()
+    elif args.all:
         candidates = _tracked_files()
     elif args.paths:
         candidates = _expand_targets([Path(p) for p in args.paths])

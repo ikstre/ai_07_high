@@ -17,6 +17,7 @@ import requests
 from .config import get_settings
 from .copy_policy import apply_copy_policy
 from .job_store import ImageJobStore
+from .library import reference_asset_descriptor, reference_asset_label
 from .llm_adapters import ChatCompletionAdapter, HyperClovaDirectAdapter, is_loopback_base_url
 
 
@@ -111,12 +112,16 @@ _COMPOSITION_TEMPLATES = {
 }
 
 # 입력에 shot_type이 없을 때 채널별 기본 구도 (PART 7-M-2 '용도' 칼럼 기반)
+# 키는 ui_steps.TARGET_CHANNEL_OPTIONS 8종과 정확히 일치해야 한다(불일치 시 조용히 hero로 폴백).
 _DEFAULT_SHOT_BY_CHANNEL = {
     "인스타그램": "top_down",
     "스마트스토어": "hero",
     "상세페이지": "hero",
-    "쿠팡": "hero",
-    "배너": "wide_scene",
+    "쿠팡 썸네일": "hero",
+    "배너 광고": "wide_scene",
+    "네이버 검색광고": "hero",
+    "카카오 채널": "eye_level",
+    "유튜브 쇼츠": "eye_level",
 }
 
 # 색온도 (PART 7-M-4). 조명(_IMAGE_DIRECTION_BY_TONE)과 같은 소스(ad_tone)에서 파생해
@@ -182,6 +187,17 @@ def _flag_prompt_injection(*texts: str) -> bool:
     return any(_PROMPT_INJECTION_HINTS.search(text or "") for text in texts)
 
 
+def _stamp_injection_flag(result: dict, flagged: bool) -> dict:
+    """카피 결과에 인젝션 탐지 결과를 감사용으로 기록한다.
+
+    시스템 프롬프트 가드레일이 모델 측 방어를 담당하고, 이 플래그는 자유텍스트
+    (소구점/추가요청)에 인젝션 시도가 있었는지를 응답 메타로 남겨 추적 가능하게 한다.
+    """
+    if isinstance(result, dict):
+        result["prompt_injection_flagged"] = bool(flagged)
+    return result
+
+
 def _request_json(url: str, *, headers: dict, payload: dict, timeout: int) -> dict:
     session = requests.Session()
     session.trust_env = False
@@ -244,6 +260,23 @@ def _ad_context(payload: dict) -> str:
     )
 
 
+def _strip_reasoning(text: str) -> str:
+    """Drop chain-of-thought wrappers emitted by "Think" models (HyperCLOVA X SEED
+    Think 8B/14B 등). 닫힌 <think>...</think> 블록을 제거하고, 닫히지 않은 채
+    남은 선행 reasoning은 첫 JSON/실제 본문 직전까지 걷어낸다.
+    """
+    if not text:
+        return text
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
+    # 닫는 태그가 누락된 경우: </think> 뒤 본문만 취하거나, 열린 <think> 이후를 버림.
+    if "</think>" in cleaned.lower():
+        idx = cleaned.lower().rfind("</think>")
+        cleaned = cleaned[idx + len("</think>"):]
+    elif re.search(r"<think>", cleaned, flags=re.IGNORECASE):
+        cleaned = re.sub(r"<think>[\s\S]*$", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
 def _extract_json_block(text: str) -> dict | None:
     if not text:
         return None
@@ -258,37 +291,192 @@ def _extract_json_block(text: str) -> dict | None:
         try:
             return json.loads(brace.group(0))
         except json.JSONDecodeError:
-            return None
-    return None
+            pass
+    # 엄격 파싱 실패 — 모델이 거의 맞는 JSON(따옴표 누락 해시태그 등)을 낸 경우,
+    # 좋은 문구를 통째로 버리지 않도록 필드 단위로 건져낸다.
+    return _salvage_fields(brace.group(0) if brace else text) or None
+
+
+def _salvage_fields(text: str) -> dict:
+    """malformed JSON에서 알려진 카피 필드를 정규식으로 개별 추출한다."""
+    salvaged: dict[str, object] = {}
+    for key in ("headline", "subcopy", "cta"):
+        match = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+        if match:
+            try:
+                salvaged[key] = json.loads(f'"{match.group(1)}"')
+            except json.JSONDecodeError:
+                salvaged[key] = match.group(1)
+    for key in ("copies", "hashtags", "spec_bullets", "specs"):
+        block = re.search(rf'"{key}"\s*:\s*\[([\s\S]*?)\]', text)
+        if not block:
+            continue
+        body = block.group(1)
+        items = [m.group(1) for m in re.finditer(r'"((?:[^"\\]|\\.)*)"', body)]
+        if key == "hashtags":
+            # 따옴표 없이 흘러나온 #해시태그 토큰도 회수.
+            items += [tok for tok in re.findall(r"#[\w가-힣]+", body) if tok not in items]
+        cleaned: list[str] = []
+        for item in items:
+            try:
+                cleaned.append(json.loads(f'"{item}"'))
+            except json.JSONDecodeError:
+                cleaned.append(item)
+        cleaned = [c.strip() for c in cleaned if c.strip()]
+        if cleaned:
+            salvaged[key] = cleaned
+    return salvaged
 
 
 def _fallback_copy(payload: dict, provider: str = "fallback", error: str | None = None) -> dict:
     style = STYLE_COPY.get(payload.get("theme", "minimal"), STYLE_COPY["minimal"])
-    product_name = payload.get("product_name") or "커스텀 키보드 셋업"
-    selling_point = payload.get("selling_point") or "키보드와 데스크테리어 제품을 한 번에 보여주는 3D 셋업"
-    target_channel = payload.get("target_channel") or "인스타그램"
-    tone = payload.get("ad_tone", "감성형")
-
-    copies = [
-        f"{style['mood']} {product_name}",
-        f"{selling_point}을 실제 촬영 없이 광고 이미지로 준비하세요.",
-        f"{target_channel}에 바로 올리기 좋은 데스크 셋업 콘텐츠를 생성합니다.",
-        f"{tone} 톤으로 다듬은 카피와 3D 미리보기를 한 번에 받아보세요.",
-    ]
+    copies = _copy_completion_candidates(payload)
     return {
         "provider": provider,
         "copies": copies,
         "headline": style["headline"],
-        "subcopy": copies[1],
+        "subcopy": _subcopy_completion_candidate(payload),
         "cta": style["cta"],
         "hashtags": ["#커스텀키보드", "#데스크테리어", "#데스크셋업", "#소상공인광고"],
-        "spec_bullets": [
-            payload.get("product_type", "커스텀 키보드"),
-            f"가격: {payload.get('price', '')}".strip(": "),
-            payload.get("selling_point", ""),
-        ],
+        "spec_bullets": _spec_bullet_candidates(payload),
         "error": error,
     }
+
+
+def _copy_context(payload: dict) -> dict[str, str]:
+    layout = sanitize_user_text(payload.get("layout"), limit=10)
+    layout_label = LAYOUT_COPY_LABELS.get(layout, f"{layout} 배열") if layout else ""
+    case_color = describe_color_ko(payload.get("case_color"))
+    keycap_color = describe_color_ko(payload.get("keycap_color"))
+    accent_color = describe_color_ko(payload.get("accent_keycap_color"))
+    color_desc = " / ".join(
+        item
+        for item in (
+            f"케이스 {case_color}" if case_color else "",
+            f"키캡 {keycap_color}" if keycap_color else "",
+            f"포인트 {accent_color}" if accent_color else "",
+        )
+        if item
+    )
+    return {
+        "product_name": sanitize_user_text(payload.get("product_name") or "커스텀 키보드 셋업", limit=80),
+        "product_type": sanitize_user_text(payload.get("product_type") or "커스텀 키보드", limit=40),
+        "selling_point": sanitize_user_text(
+            payload.get("selling_point") or "키보드와 데스크테리어 제품을 한 번에 보여주는 3D 셋업",
+            limit=240,
+        ),
+        "target_channel": sanitize_user_text(payload.get("target_channel") or "인스타그램", limit=30),
+        "target_customer": sanitize_user_text(
+            payload.get("target_customer") or "데스크테리어에 관심 있는 고객",
+            limit=120,
+        ),
+        "tone": sanitize_user_text(payload.get("ad_tone") or "감성형", limit=30),
+        "layout": layout_label,
+        "colors": color_desc,
+        "case_finish": sanitize_user_text(payload.get("case_finish") or "", limit=30).replace("_", " "),
+        "switch": sanitize_user_text(payload.get("switch_stem") or "", limit=30).replace("_", " "),
+        "switch_family": sanitize_user_text(payload.get("switch_family") or "", limit=30).replace("_", " "),
+        "keycap_profile": sanitize_user_text(payload.get("keycap_profile") or "", limit=30).replace("_", " "),
+        "mount_type": sanitize_user_text(payload.get("mount_type") or "", limit=30).replace("_", " "),
+        "plate_material": sanitize_user_text(payload.get("plate_material") or "", limit=30).replace("_", " "),
+        "price": sanitize_user_text(payload.get("price") or "", limit=30),
+    }
+
+
+def _copy_completion_candidates(payload: dict) -> list[str]:
+    ctx = _copy_context(payload)
+    visual_detail = " / ".join(item for item in (ctx["layout"], ctx["colors"]) if item) or ctx["product_type"]
+    build_detail = " / ".join(
+        item
+        for item in (
+            f"{ctx['case_finish']} 케이스" if ctx["case_finish"] else "",
+            f"{ctx['keycap_profile']} 키캡" if ctx["keycap_profile"] else "",
+            f"{ctx['switch']} 스위치" if ctx["switch"] else "",
+        )
+        if item
+    ) or ctx["selling_point"]
+    return [
+        f"{ctx['product_name']}은 {visual_detail} 조합으로 작은 책상에서도 정돈된 존재감을 만듭니다.",
+        f"{ctx['selling_point']}을 중심으로 손끝의 타건감과 데스크 위 분위기를 함께 보여줍니다.",
+        f"{build_detail} 디테일이 가까이 볼수록 제품의 마감과 사용감을 더 또렷하게 전합니다.",
+        f"{ctx['target_customer']}에게 어울리는 장면으로 제품 메인 컷과 키캡 디테일을 함께 설득합니다.",
+        f"{ctx['target_channel']} 콘텐츠에 맞춰 디자인, 배열, 타건 포인트를 한 문장씩 골라 쓰기 좋게 풀었습니다.",
+    ]
+
+
+def _subcopy_completion_candidate(payload: dict) -> str:
+    ctx = _copy_context(payload)
+    detail = " / ".join(
+        item
+        for item in (
+            ctx["layout"],
+            ctx["colors"],
+            f"{ctx['case_finish']} 마감" if ctx["case_finish"] else "",
+            f"{ctx['switch']} 스위치" if ctx["switch"] else "",
+        )
+        if item
+    )
+    if detail:
+        return f"{detail}을 담아 손끝의 타건감과 정돈된 데스크 무드를 함께 보여주는 광고 카피"
+    return f"{ctx['selling_point']}을 바탕으로 제품의 디자인과 사용 장면을 구체적으로 보여주는 광고 카피"
+
+
+def _spec_bullet_candidates(payload: dict) -> list[str]:
+    ctx = _copy_context(payload)
+    switch_detail = " ".join(item for item in (ctx["switch_family"], ctx["switch"]) if item)
+    candidates = [
+        ctx["layout"],
+        f"색상 구성: {ctx['colors']}" if ctx["colors"] else "",
+        f"케이스 마감: {ctx['case_finish']}" if ctx["case_finish"] else "",
+        f"스위치: {switch_detail}" if switch_detail else "",
+        f"키캡 프로파일: {ctx['keycap_profile']}" if ctx["keycap_profile"] else "",
+        f"마운트: {ctx['mount_type']}" if ctx["mount_type"] else "",
+        f"보강판: {ctx['plate_material']}" if ctx["plate_material"] else "",
+        f"가격: {ctx['price']}" if ctx["price"] else "",
+        ctx["selling_point"],
+    ]
+    return _dedupe_texts(candidates)[:5]
+
+
+def _dedupe_texts(values: list[object]) -> list[str]:
+    seen: set[str] = set()
+    output = []
+    for value in values:
+        text = sanitize_user_text(value, limit=180)
+        if not text:
+            continue
+        key = re.sub(r"\s+", "", text).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(text)
+    return output
+
+
+def _complete_copy_payload(payload: dict, result: dict) -> dict:
+    output = dict(result)
+
+    copies_value = output.get("copies") or []
+    if not isinstance(copies_value, list):
+        copies_value = [copies_value]
+    output["copies"] = _dedupe_texts([*copies_value, *_copy_completion_candidates(payload)])[:5]
+
+    specs_value = output.get("spec_bullets") or output.get("specs") or []
+    if not isinstance(specs_value, list):
+        specs_value = [specs_value]
+    output["spec_bullets"] = _dedupe_texts([*specs_value, *_spec_bullet_candidates(payload)])[:5]
+
+    subcopy = sanitize_user_text(output.get("subcopy"), limit=180)
+    if len(subcopy) < 35:
+        output["subcopy"] = _subcopy_completion_candidate(payload)
+    else:
+        output["subcopy"] = subcopy
+
+    if not sanitize_user_text(output.get("headline"), limit=80):
+        output["headline"] = STYLE_COPY.get(payload.get("theme", "minimal"), STYLE_COPY["minimal"])["headline"]
+    if not sanitize_user_text(output.get("cta"), limit=40):
+        output["cta"] = STYLE_COPY.get(payload.get("theme", "minimal"), STYLE_COPY["minimal"])["cta"]
+    return output
 
 
 def _merge_structured_response(base: dict, parsed: dict | None) -> dict:
@@ -316,8 +504,8 @@ CHANNEL_COPY_HINTS = {
     "인스타그램": "스크롤을 멈추게 하는 첫 줄 후킹, 감각적인 단어, 줄바꿈으로 리듬",
     "스마트스토어": "검색 노출을 의식한 제품 키워드 + 신뢰감 있는 베네핏 서술",
     "상세페이지": "구매 직전 고객을 설득하는 베네핏 중심, 조금 더 길고 친절한 톤",
-    "쿠팡": "핵심 베네핏 한 방, 짧고 강한 구매 유도",
-    "배너": "한눈에 읽히는 초압축 메시지, 군더더기 없는 카피",
+    "쿠팡 썸네일": "핵심 베네핏 한 방, 짧고 강한 구매 유도",
+    "배너 광고": "한눈에 읽히는 초압축 메시지, 군더더기 없는 카피",
     "네이버 검색광고": "검색어와 제품 키워드를 자연스럽게 포함하되 과장 없이 명확한 혜택",
     "카카오 채널": "친근한 알림형 문장, 짧은 혜택 설명, 바로 반응할 수 있는 CTA",
     "유튜브 쇼츠": "첫 2초 후킹, 짧은 리듬, 영상 자막으로 읽히는 문장",
@@ -342,7 +530,9 @@ def _system_prompt(payload: dict | None = None) -> str:
         "풀배열·텐키리스·65% 배열, 가스켓 마운트 등)를 자연스럽게 녹이되, 비전문 고객도 이해하도록 과한 전문용어 나열은 피한다.\n"
         f"4. 광고 톤: '{tone}' — {tone_hint}\n"
         f"5. 채널: '{channel}' — {channel_hint}\n"
-        "6. copies 4-5개는 서로 다른 각도(감성/기능/장면/구매유도)로 써서 골라 쓸 수 있게 한다.\n"
+        "6. copies 5개는 서로 다른 각도(감성/기능/장면/구매유도/디테일)로 써서 골라 쓸 수 있게 한다.\n"
+        "7. subcopy와 copies에는 입력된 상품 특징, 디자인 마감, 색상, 배열, 타건감 등 구체 정보를 최소 2개 이상 녹인다. "
+        "너무 짧은 구호형 문장만 내지 말고, 제품이 어떻게 보이고 느껴지는지 풀어서 설명한다.\n"
         "\n"
         "[가드레일]\n"
         "- 수치·스펙은 입력으로 받은 사실만 사용하고, 없는 정보는 지어내지 않는다.\n"
@@ -353,9 +543,9 @@ def _system_prompt(payload: dict | None = None) -> str:
         "- JSON 외의 텍스트, 설명, 메타정보는 출력하지 않는다.\n"
         "\n"
         "[출력 형식] 반드시 아래 필드만 가진 JSON 하나로 반환한다:\n"
-        "headline (1줄, 후킹, 20자 내외), subcopy (1줄, 베네핏, 40자 내외), "
-        "cta (12자 이내, 행동 유도), copies (4-5개의 광고 카피 문장 배열), "
-        "hashtags (4-6개 해시태그 배열), spec_bullets (3-5개의 스펙/특징 bullet 문자열)."
+        "headline (1줄, 후킹, 20-28자), subcopy (1줄, 베네핏+디자인 상세, 55-80자), "
+        "cta (16자 이내, 행동 유도), copies (5개의 45-90자 광고 카피 문장 배열), "
+        "hashtags (4-6개 해시태그 배열), spec_bullets (4-5개의 스펙/특징 bullet 문자열)."
     )
 
 
@@ -377,13 +567,14 @@ _COPY_EXEMPLARS: dict[str, dict] = {
             "subcopy": "은은한 키감과 무드 조명이 만드는 나만의 작업 공간",
             "cta": "내 책상에 더하기",
             "copies": [
-                "타건음 하나로 하루의 피로가 풀리는 데스크 셋업",
-                "조명 하나 바꿨을 뿐인데, 매일 앉고 싶은 책상",
-                "사진으로 담기 아까운 무드, 직접 완성해 보세요",
-                "오늘부터 내 책상이 인테리어가 됩니다",
+                "크림 베이지 키캡과 65% 배열이 작은 책상 위에도 따뜻한 여백을 만들어 줍니다.",
+                "조용한 타건감이 퇴근 후의 작업 시간을 차분한 데스크 무드로 바꿔 줍니다.",
+                "키캡 톤과 무드 조명이 어우러져 사진으로 남기고 싶은 홈오피스를 완성합니다.",
+                "방향키까지 챙긴 컴팩트 배열로 공간은 덜 차지하고 사용감은 자연스럽게 유지합니다.",
+                "은은한 색감과 부드러운 키감이 매일 앉고 싶은 책상의 첫인상을 만듭니다.",
             ],
             "hashtags": ["#데스크테리어", "#커스텀키보드", "#데스크셋업", "#무드등", "#홈오피스"],
-            "spec_bullets": ["65% 컴팩트 배열", "조용한 타건감", "크림 베이지 키캡 톤"],
+            "spec_bullets": ["65% 컴팩트 배열", "방향키 포함", "조용한 타건감", "크림 베이지 키캡 톤"],
         },
     },
     "프리미엄형": {
@@ -401,13 +592,14 @@ _COPY_EXEMPLARS: dict[str, dict] = {
             "subcopy": "정교한 마감과 묵직한 타건감, 손끝에서 느껴지는 차이",
             "cta": "프리미엄 구성 보기",
             "copies": [
-                "한 끗 다른 마감이 책상 전체의 무게를 바꿉니다",
-                "보이지 않는 곳까지 신경 쓴 빌드 퀄리티",
-                "오래 봐도 질리지 않는 절제된 디자인",
-                "타협 없는 셋업을 원하는 당신에게",
+                "정교한 CNC 마감과 풀메탈 하우징이 책상 전체의 무게감을 차분하게 끌어올립니다.",
+                "87키 텐키리스 배열로 작업 공간은 넓게 쓰고 필요한 키는 안정적으로 유지합니다.",
+                "묵직한 타건감과 단단한 빌드가 손끝에서 프리미엄 셋업의 차이를 전합니다.",
+                "오래 봐도 질리지 않는 절제된 디자인으로 모니터와 데스크 소품까지 자연스럽게 받쳐 줍니다.",
+                "마감, 배열, 타건감을 모두 따지는 사용자에게 어울리는 완성도 높은 선택입니다.",
             ],
             "hashtags": ["#커스텀키보드", "#풀메탈키보드", "#데스크테리어", "#하이엔드셋업"],
-            "spec_bullets": ["풀메탈 CNC 케이스", "87키 TKL 배열", "묵직한 타건감"],
+            "spec_bullets": ["풀메탈 CNC 케이스", "87키 TKL 배열", "묵직한 타건감", "프리미엄 데스크 셋업"],
         },
     },
     "기능강조형": {
@@ -425,13 +617,14 @@ _COPY_EXEMPLARS: dict[str, dict] = {
             "subcopy": "알루미늄 보강판과 가스켓 마운트로 잡은 안정적인 타건",
             "cta": "스펙 자세히 보기",
             "copies": [
-                "흔들림 없는 가스켓 마운트로 일관된 타건감",
-                "장시간 작업에도 손목이 편한 설계",
-                "알루미늄 보강판으로 변형 적은 견고한 빌드",
-                "필요한 구성만 정확하게 담았습니다",
+                "가스켓 마운트 구조가 타건 충격을 부드럽게 받아 장시간 입력에도 안정감을 줍니다.",
+                "75% 배열은 기능열과 방향키를 유지하면서 책상 공간을 더 효율적으로 남깁니다.",
+                "알루미늄 보강판이 키 입력의 흔들림을 줄이고 일관된 타건감을 받쳐 줍니다.",
+                "업무용으로 필요한 키 구성은 챙기고 불필요한 부피는 덜어낸 실용적인 구성입니다.",
+                "재질과 구조를 한눈에 설명할 수 있어 스마트스토어 상세 설명에도 바로 쓰기 좋습니다.",
             ],
             "hashtags": ["#커스텀키보드", "#가스켓마운트", "#75키보드", "#타건감"],
-            "spec_bullets": ["알루미늄 보강판", "가스켓 마운트 구조", "75% 배열"],
+            "spec_bullets": ["알루미늄 보강판", "가스켓 마운트 구조", "75% 배열", "장시간 타이핑용 구성"],
         },
     },
     "할인형": {
@@ -449,13 +642,14 @@ _COPY_EXEMPLARS: dict[str, dict] = {
             "subcopy": "합리적인 구성으로 완성하는 데스크테리어",
             "cta": "혜택 확인하기",
             "copies": [
-                "부담은 줄이고 만족도는 높인 셋업",
-                "지금 구성하면 더 알차게 채우는 책상",
-                "고민하던 그 키보드, 이번 기회에",
-                "가성비와 무드를 동시에 잡았습니다",
+                "65% 배열과 기본 구성을 합리적으로 담아 첫 커스텀 키보드 선택의 부담을 낮췄습니다.",
+                "작은 책상에도 잘 맞는 크기로 데스크테리어와 실사용성을 한 번에 챙길 수 있습니다.",
+                "무난한 키캡 톤과 구성으로 처음 셋업을 바꾸는 입문자도 쉽게 어울립니다.",
+                "가격 메리트와 데스크 무드를 함께 보여줘 쿠팡 썸네일에서도 핵심이 바로 보입니다.",
+                "고민하던 키보드 셋업을 지금 구성하면 책상 분위기부터 사용감까지 달라집니다.",
             ],
             "hashtags": ["#커스텀키보드", "#입문키보드", "#데스크셋업", "#가성비키보드"],
-            "spec_bullets": ["입문용 65% 세트", "합리적인 가격", "무난한 기본 구성"],
+            "spec_bullets": ["입문용 65% 세트", "합리적인 가격", "무난한 기본 구성", "작은 책상용 배열"],
         },
     },
 }
@@ -474,15 +668,59 @@ def _copy_temperature(payload: dict) -> float:
     return _TEMPERATURE_BY_TONE.get(tone, 0.7)
 
 
-def _copy_messages(payload: dict) -> list[dict]:
-    """system(역할/지침) + 멀티턴 few-shot(가짜요청→모범응답) + 실제 요청."""
+def _reference_image_b64(payload: dict) -> str | None:
+    """멀티모달 입력용 제품 이미지(base64/data URL)를 꺼낸다.
+
+    직접 전달된 ``reference_image_b64``가 우선이고, 없으면 선택한 공용
+    도면/레퍼런스(``reference_asset_path``)가 래스터 이미지일 때 그 파일을
+    읽어 base64로 자동 투입한다 → 라이브러리 도면이 vision 경로에서 실제로 쓰인다.
+    """
+    raw = payload.get("reference_image_b64")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    descriptor = reference_asset_descriptor(payload.get("reference_asset_path"))
+    if descriptor and descriptor["is_raster"]:
+        try:
+            return base64.b64encode(descriptor["path"].read_bytes()).decode("ascii")
+        except OSError:
+            return None
+    return None
+
+
+def _image_data_url(value: str) -> str:
+    """raw base64면 data URL로 감싸고, 이미 data URL이면 그대로 둔다."""
+    if value.startswith("data:"):
+        return value
+    return f"data:image/png;base64,{value}"
+
+
+def _user_content_with_image(text: str, payload: dict) -> str | list[dict]:
+    """비전 경로에서 OpenAI 멀티모달 content(text + image_url part)를 만든다."""
+    image = _reference_image_b64(payload)
+    if not image:
+        return text
+    return [
+        {"type": "text", "text": text},
+        {"type": "image_url", "image_url": {"url": _image_data_url(image)}},
+    ]
+
+
+def _copy_messages(payload: dict, *, attach_image: bool = False) -> list[dict]:
+    """system(역할/지침) + 멀티턴 few-shot(가짜요청→모범응답) + 실제 요청.
+
+    attach_image=True이고 payload에 제품 이미지가 있으면 마지막 user 메시지를
+    OpenAI 멀티모달 content(text+image_url)로 만든다. 비전 미지원 provider는
+    attach_image=False로 호출돼 기존 텍스트 경로를 그대로 탄다.
+    """
     tone = sanitize_user_text(payload.get("ad_tone", "감성형"), limit=30)
     shot = _COPY_EXEMPLARS.get(tone) or _COPY_EXEMPLARS["감성형"]
+    user_text = _ad_context(payload)
+    user_content = _user_content_with_image(user_text, payload) if attach_image else user_text
     return [
         {"role": "system", "content": _system_prompt(payload)},
         {"role": "user", "content": shot["sample"]},
         {"role": "assistant", "content": json.dumps(shot["output"], ensure_ascii=False)},
-        {"role": "user", "content": _ad_context(payload)},
+        {"role": "user", "content": user_content},
     ]
 
 
@@ -516,6 +754,7 @@ def _copy_adapter(name: str) -> ChatCompletionAdapter | HyperClovaDirectAdapter:
             default_model="gpt-4o-mini",
             require_api_key=True,
             json_response_format=True,
+            supports_vision=_env_bool("OPENAI_SUPPORTS_VISION", True),
         )
     if name == "hyperclova":
         if settings.hyperclova_use_direct:
@@ -535,6 +774,7 @@ def _copy_adapter(name: str) -> ChatCompletionAdapter | HyperClovaDirectAdapter:
             default_model="HCX-005",
             require_api_key=not is_loopback_base_url(settings.hyperclova_base_url),
             json_response_format=False,
+            supports_vision=_env_bool("HYPERCLOVA_SUPPORTS_VISION", False),
         )
     if name == "kanana":
         return ChatCompletionAdapter(
@@ -619,14 +859,44 @@ def available_text_providers() -> dict:
     return {"providers": providers, "auto_order": TEXT_PROVIDER_ORDER}
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _copy_request_timeout(adapter: ChatCompletionAdapter | HyperClovaDirectAdapter) -> int:
+    settings_timeout = get_settings().request_timeout_seconds
+    provider_timeouts = {
+        "hyperclova_x": "HYPERCLOVA_REQUEST_TIMEOUT_SECONDS",
+        "hyperclova_x_direct": "HYPERCLOVA_REQUEST_TIMEOUT_SECONDS",
+        "kanana": "KANANA_REQUEST_TIMEOUT_SECONDS",
+        "midm": "MIDM_REQUEST_TIMEOUT_SECONDS",
+        "local_llm": "LOCAL_LLM_REQUEST_TIMEOUT_SECONDS",
+        "openai": "OPENAI_REQUEST_TIMEOUT_SECONDS",
+    }
+    env_name = provider_timeouts.get(adapter.name, "LLM_REQUEST_TIMEOUT_SECONDS")
+    return max(1, _env_int(env_name, _env_int("LLM_REQUEST_TIMEOUT_SECONDS", settings_timeout)))
+
+
 def _chat_copy(payload: dict, adapter: ChatCompletionAdapter | HyperClovaDirectAdapter) -> dict:
+    attach_image = bool(getattr(adapter, "supports_vision", False) and _reference_image_b64(payload))
     content = adapter.request(
         system_prompt=_system_prompt(payload),
         user_prompt=_ad_context(payload),
-        messages=_copy_messages(payload),
+        messages=_copy_messages(payload, attach_image=attach_image),
         temperature=_copy_temperature(payload),
-        timeout=get_settings().request_timeout_seconds,
+        timeout=_copy_request_timeout(adapter),
     )
+    content = _strip_reasoning(content)
     base = _fallback_copy(payload, provider=adapter.name)
     parsed = _extract_json_block(content)
     if parsed is None and content:
@@ -636,7 +906,7 @@ def _chat_copy(payload: dict, adapter: ChatCompletionAdapter | HyperClovaDirectA
             parsed = None
     if content:
         base["raw"] = content
-    return _merge_structured_response(base, parsed)
+    return _complete_copy_payload(payload, _merge_structured_response(base, parsed))
 
 
 def generate_ad_copy(payload: dict, provider_override: str | None = None, *, force_regen: bool = False) -> dict:
@@ -646,9 +916,16 @@ def generate_ad_copy(payload: dict, provider_override: str | None = None, *, for
     settings = get_settings()
     provider = _normalize_text_provider(provider_override or settings.ai_provider)
     errors: list[str] = []
+    # 자유텍스트(소구점 240·추가요청 400)에 인젝션 시도가 있었는지 프롬프트 진입 전 1회 판정.
+    injection_flagged = _flag_prompt_injection(
+        payload.get("selling_point"), payload.get("extra_request")
+    )
 
     if provider == "fallback":
-        return apply_copy_policy(payload, _fallback_copy(payload))
+        return _stamp_injection_flag(
+            apply_copy_policy(payload, _complete_copy_payload(payload, _fallback_copy(payload))),
+            injection_flagged,
+        )
 
     for provider_name in _provider_order(provider):
         adapter = _copy_adapter(provider_name)
@@ -661,7 +938,7 @@ def generate_ad_copy(payload: dict, provider_override: str | None = None, *, for
             cache_key = make_text_cache_key(payload, provider_name, adapter.model or adapter.default_model)
             cached = get_text_cache(cache_key)
             if cached is not None:
-                return apply_copy_policy(payload, cached)
+                return _stamp_injection_flag(apply_copy_policy(payload, cached), injection_flagged)
 
         ensure_text_worker(start_managed_worker=_uses_managed_text_worker(adapter))
         try:
@@ -669,14 +946,17 @@ def generate_ad_copy(payload: dict, provider_override: str | None = None, *, for
             cache_key = make_text_cache_key(payload, provider_name, adapter.model or adapter.default_model)
             put_text_cache(cache_key, result)
             schedule_idle_reap()
-            return result
+            return _stamp_injection_flag(result, injection_flagged)
         except Exception as exc:
             errors.append(f"{adapter.name}: {exc}")
             if provider != "auto":
                 break
 
     error_text = "; ".join(errors) if errors else None
-    return apply_copy_policy(payload, _fallback_copy(payload, error=error_text))
+    return _stamp_injection_flag(
+        apply_copy_policy(payload, _complete_copy_payload(payload, _fallback_copy(payload, error=error_text))),
+        injection_flagged,
+    )
 
 
 def normalize_selected_copy(payload: dict) -> dict | None:
@@ -687,7 +967,7 @@ def normalize_selected_copy(payload: dict) -> dict | None:
     selected = {
         "provider": sanitize_user_text(raw.get("provider") or "selected", limit=60),
         "headline": sanitize_user_text(raw.get("headline"), limit=80),
-        "subcopy": sanitize_user_text(raw.get("subcopy"), limit=160),
+        "subcopy": sanitize_user_text(raw.get("subcopy"), limit=180),
         "cta": sanitize_user_text(raw.get("cta"), limit=40),
         "copies": [
             sanitize_user_text(copy, limit=160)
@@ -855,7 +1135,21 @@ def build_image_prompt(payload: dict, copy_result: dict) -> str:
     switch_family = sanitize_user_text(payload.get("switch_family", "mx"), limit=30).replace("_", " ")
     keycap_profile = sanitize_user_text(payload.get("keycap_profile", "cherry"), limit=30).replace("_", " ")
     mount_type = sanitize_user_text(payload.get("mount_type", "top_mount"), limit=30).replace("_", " ")
-    reference = sanitize_user_text(payload.get("reference_asset_path") or "procedural 3D preview", limit=120)
+    reference_descriptor = reference_asset_descriptor(payload.get("reference_asset_path"))
+    if reference_descriptor:
+        # 경로 문자열 대신 사람이 읽는 라벨+종류를 프롬프트에 넣어 실제 신호로 작동시킨다.
+        _kind_label = {
+            "reference": "drawing/photo reference",
+            "cad": "CAD drawing reference",
+            "model": "3D model reference",
+        }.get(reference_descriptor["kind"], "reference")
+        reference = sanitize_user_text(
+            f"{reference_descriptor['label']} ({_kind_label})", limit=120
+        )
+    elif payload.get("reference_asset_path"):
+        reference = sanitize_user_text(reference_asset_label(payload.get("reference_asset_path")), limit=120)
+    else:
+        reference = "procedural 3D preview"
     layout = sanitize_user_text(payload.get("layout", "65"), limit=10)
     layout_label = LAYOUT_PROMPT_LABELS.get(layout, f"{layout}% custom keyboard layout")
     case_color = describe_color(payload.get("case_color"))
@@ -945,16 +1239,47 @@ def build_image_prompt(payload: dict, copy_result: dict) -> str:
         parts.append(f"[reference] {reference}. ")
     if color_clause:
         parts.append(f"[color palette] {color_clause}. ")
+    if payload.get("poster_template") == "grid_three":
+        shot_plan_text = "; ".join(
+            f"{index + 1}) {shot['label']} — {shot['instruction']}"
+            for index, shot in enumerate(_grid_three_shot_plan(payload))
+        )
+        parts.append(
+            "[grid three shot plan] Generate a varied three-cut advertising set when the image backend supports batches: "
+            f"{shot_plan_text}. Keep the same product, colors, layout, and materials across all shots. "
+        )
     if extra:
         parts.append(f"[art direction] {extra}. ")
     return "".join(parts).strip()
+
+
+PosterImageInput = str | list[str] | tuple[str, ...] | None
+
+
+def _poster_image_list(image_b64: PosterImageInput) -> list[str]:
+    if isinstance(image_b64, str):
+        clean = _safe_inline_image(image_b64)
+        return [clean] if clean else []
+    if isinstance(image_b64, (list, tuple)):
+        return [clean for item in image_b64 if (clean := _safe_inline_image(str(item)))]
+    return []
+
+
+def _first_poster_image(image_b64: PosterImageInput) -> str | None:
+    images = _poster_image_list(image_b64)
+    return images[0] if images else None
 
 
 def _wrap(text: str, width: int, max_lines: int = 3) -> list[str]:
     text = str(text or "")
     if len(text) <= width:
         return [text]
-    return textwrap.wrap(text, width=width, break_long_words=False, replace_whitespace=False)[:max_lines]
+    lines = textwrap.wrap(text, width=width, break_long_words=False, replace_whitespace=False)
+    if len(lines) <= max_lines:
+        return lines
+    clipped = lines[:max_lines]
+    clipped[-1] = _fit_svg_text(clipped[-1] + "…", font_size=16, max_width=width * 16)
+    return clipped
 
 
 PALETTES = {
@@ -1023,16 +1348,29 @@ def _cta_button_svg(
     )
 
 
-def _hero_image_svg(payload: dict, image_b64: str | None, x: int, y: int, w: int, h: int, accent: str, ink: str) -> str:
+def _hero_image_svg(
+    payload: dict,
+    image_b64: str | None,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    accent: str,
+    ink: str,
+    *,
+    fit: str = "meet",
+    align: str = "xMidYMid",
+) -> str:
     if image_b64:
         clip_id = f"hero_{x}_{y}_{w}_{h}"
-        # 배경 rect로 박스를 채우고 이미지는 meet(전체 표시)로 얹어 상하/좌우 잘림을 없앤다.
-        # 둥근 모서리 클립으로 카드 느낌 유지. (이전 slice는 비율이 다른 이미지를 잘라냈음)
+        fit_mode = "slice" if fit == "slice" else "meet"
+        # 기본 히어로는 meet로 전체를 보여주고, grid_three의 보조 컷은 slice+align으로
+        # 한 장의 원본에서도 디테일/무드 크롭이 다르게 보이도록 한다.
         return (
             f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="24" fill="{accent}" opacity="0.16"/>'
             f'<clipPath id="{clip_id}"><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="24"/></clipPath>'
             f'<image href="data:image/png;base64,{html.escape(_safe_inline_image(image_b64))}" '
-            f'x="{x}" y="{y}" width="{w}" height="{h}" preserveAspectRatio="xMidYMid meet" '
+            f'x="{x}" y="{y}" width="{w}" height="{h}" preserveAspectRatio="{align} {fit_mode}" '
             f'clip-path="url(#{clip_id})" />'
         )
     # Stylized desk illustration as fallback hero (rect+keyboard+monitor silhouettes).
@@ -1053,18 +1391,21 @@ def _hero_image_svg(payload: dict, image_b64: str | None, x: int, y: int, w: int
     )
 
 
-def _minimal_card_svg(payload: dict, copy_result: dict, image_b64: str | None) -> str:
+def _minimal_card_svg(payload: dict, copy_result: dict, image_b64: PosterImageInput) -> str:
     width, height = _ratio_size(payload.get("image_ratio", "1:1"))
     theme = payload.get("theme", "minimal")
     bg, ink, accent, wood = PALETTES.get(theme, PALETTES["minimal"])
     product = html.escape(payload.get("product_name", "DeskAd Setup"))
     price = html.escape(payload.get("price", ""))
-    headline = html.escape(copy_result.get("headline") or copy_result.get("copies", [product])[0])
+    # copies가 [](빈 리스트)면 dict.get 기본값이 적용 안 돼 [][0] IndexError → `or`로 가드.
+    copies = copy_result.get("copies") or [product]
+    headline = html.escape(copy_result.get("headline") or copies[0])
     subcopy = html.escape(copy_result.get("subcopy") or "3D 셋업 미리보기 기반 광고 콘텐츠")
     cta = html.escape(copy_result.get("cta") or "지금 확인하기")
 
     headline_lines = _wrap(headline, 18)
-    subcopy_lines = _wrap(subcopy, 28)
+    # subcopy 목표 길이(~80자)가 줄 수 부족으로 "…"로 잘리지 않도록 4줄까지 허용.
+    subcopy_lines = _wrap(subcopy, 30, 4)
     headline_svg = "".join(
         f'<text x="{int(width*0.08)}" y="{int(height*0.13) + i*58}" font-size="48" font-weight="800" fill="{ink}">{line}</text>'
         for i, line in enumerate(headline_lines)
@@ -1078,7 +1419,7 @@ def _minimal_card_svg(payload: dict, copy_result: dict, image_b64: str | None) -
     hero_y = int(height * 0.40)
     hero_w = int(width * 0.74)
     hero_h = int(height * 0.36)
-    hero_svg = _hero_image_svg(payload, image_b64, hero_x, hero_y, hero_w, hero_h, wood, ink)
+    hero_svg = _hero_image_svg(payload, _first_poster_image(image_b64), hero_x, hero_y, hero_w, hero_h, wood, ink)
     cta_svg = _cta_button_svg(
         x=int(width * 0.08),
         y=int(height * 0.89),
@@ -1102,7 +1443,7 @@ def _minimal_card_svg(payload: dict, copy_result: dict, image_b64: str | None) -
 </svg>'''
 
 
-def _grid_three_svg(payload: dict, copy_result: dict, image_b64: str | None) -> str:
+def _grid_three_svg(payload: dict, copy_result: dict, image_b64: PosterImageInput) -> str:
     width, height = _ratio_size(payload.get("image_ratio", "1:1"))
     theme = payload.get("theme", "minimal")
     bg, ink, accent, wood = PALETTES.get(theme, PALETTES["minimal"])
@@ -1121,6 +1462,11 @@ def _grid_three_svg(payload: dict, copy_result: dict, image_b64: str | None) -> 
     small_x = big_x + big_w + pad // 2
     small_y_top = big_y
     small_y_bot = big_y + small_h + pad // 2
+    images = _poster_image_list(image_b64)
+    main_image = images[0] if len(images) >= 1 else None
+    detail_image = images[1] if len(images) >= 2 else main_image
+    mood_image = images[2] if len(images) >= 3 else main_image
+    has_distinct_shots = len(images) >= 3
 
     headline_lines = _wrap(headline, 16, 2)
     headline_svg = "".join(
@@ -1129,25 +1475,27 @@ def _grid_three_svg(payload: dict, copy_result: dict, image_b64: str | None) -> 
     )
     subcopy_svg = "".join(
         f'<text x="{pad}" y="{int(height*0.865) + i*26}" font-size="20" fill="{ink}" opacity="0.78">{line}</text>'
-        for i, line in enumerate(_wrap(subcopy, 32, 2))
+        for i, line in enumerate(_wrap(subcopy, 32, 3))
     )
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect width="{width}" height="{height}" fill="{bg}"/>
   {headline_svg}
-  {_hero_image_svg(payload, image_b64, big_x, big_y, big_w, big_h, wood, ink)}
-  {_hero_image_svg(payload, image_b64, small_x, small_y_top, small_w, small_h, accent, ink)}
+  {_hero_image_svg(payload, main_image, big_x, big_y, big_w, big_h, wood, ink, fit="meet")}
+  <rect x="{big_x}" y="{big_y + big_h - 38}" width="{big_w}" height="38" fill="{ink}" opacity="0.48"/>
+  <text x="{big_x + 18}" y="{big_y + big_h - 13}" font-size="18" font-weight="800" fill="#ffffff">제품 메인 컷</text>
+  {_hero_image_svg(payload, detail_image, small_x, small_y_top, small_w, small_h, accent, ink, fit="meet" if has_distinct_shots else "slice", align="xMidYMid")}
   <rect x="{small_x}" y="{small_y_top + small_h - 32}" width="{small_w}" height="32" fill="{ink}" opacity="0.55"/>
-  <text x="{small_x + 16}" y="{small_y_top + small_h - 11}" font-size="16" font-weight="700" fill="#ffffff">셋업 컷 #1</text>
-  {_hero_image_svg(payload, image_b64, small_x, small_y_bot, small_w, small_h, wood, ink)}
+  <text x="{small_x + 16}" y="{small_y_top + small_h - 11}" font-size="16" font-weight="700" fill="#ffffff">키캡·스위치 디테일</text>
+  {_hero_image_svg(payload, mood_image, small_x, small_y_bot, small_w, small_h, wood, ink, fit="meet" if has_distinct_shots else "slice", align="xMaxYMid")}
   <rect x="{small_x}" y="{small_y_bot + small_h - 32}" width="{small_w}" height="32" fill="{ink}" opacity="0.55"/>
-  <text x="{small_x + 16}" y="{small_y_bot + small_h - 11}" font-size="16" font-weight="700" fill="#ffffff">셋업 컷 #2</text>
+  <text x="{small_x + 16}" y="{small_y_bot + small_h - 11}" font-size="16" font-weight="700" fill="#ffffff">데스크 무드 컷</text>
   <text x="{pad}" y="{int(height*0.83)}" font-size="26" font-weight="700" fill="{ink}">{product}</text>
   {subcopy_svg}
   <text x="{pad}" y="{int(height*0.96)}" font-size="18" fill="{accent}">{hashtags}</text>
 </svg>'''
 
 
-def _feature_focus_svg(payload: dict, copy_result: dict, image_b64: str | None) -> str:
+def _feature_focus_svg(payload: dict, copy_result: dict, image_b64: PosterImageInput) -> str:
     width, height = _ratio_size(payload.get("image_ratio", "1:1"))
     theme = payload.get("theme", "minimal")
     bg, ink, accent, wood = PALETTES.get(theme, PALETTES["minimal"])
@@ -1197,7 +1545,7 @@ def _feature_focus_svg(payload: dict, copy_result: dict, image_b64: str | None) 
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect width="{width}" height="{height}" fill="{bg}"/>
   {headline_svg}
-  {_hero_image_svg(payload, image_b64, hero_x, hero_y, hero_w, hero_h, wood, ink)}
+  {_hero_image_svg(payload, _first_poster_image(image_b64), hero_x, hero_y, hero_w, hero_h, wood, ink)}
   <rect x="{spec_x - 8}" y="{spec_y - 8}" width="{spec_w + 16}" height="{hero_h + 16}" rx="20" fill="{accent}" opacity="0.10"/>
   <text x="{spec_x}" y="{spec_y + 26}" font-size="20" font-weight="800" fill="{ink}" opacity="0.6">SPECS</text>
   {bullets_svg}
@@ -1206,7 +1554,7 @@ def _feature_focus_svg(payload: dict, copy_result: dict, image_b64: str | None) 
 </svg>'''
 
 
-def _promo_banner_svg(payload: dict, copy_result: dict, image_b64: str | None) -> str:
+def _promo_banner_svg(payload: dict, copy_result: dict, image_b64: PosterImageInput) -> str:
     width, height = _ratio_size(payload.get("image_ratio", "16:9"))
     theme = payload.get("theme", "minimal")
     bg, ink, accent, wood = PALETTES.get(theme, PALETTES["minimal"])
@@ -1229,7 +1577,7 @@ def _promo_banner_svg(payload: dict, copy_result: dict, image_b64: str | None) -
     )
     subcopy_svg = "".join(
         f'<text x="{pad}" y="{int(height*0.52) + i*30}" font-size="22" fill="{ink}" opacity="0.78">{line}</text>'
-        for i, line in enumerate(_wrap(subcopy, 26, 2))
+        for i, line in enumerate(_wrap(subcopy, 30, 4))
     )
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect width="{width}" height="{height}" fill="{bg}"/>
@@ -1241,7 +1589,7 @@ def _promo_banner_svg(payload: dict, copy_result: dict, image_b64: str | None) -
   <text x="{pad}" y="{int(height*0.72)}" font-size="24" fill="{ink}" opacity="0.78">{price}</text>
   <rect x="{pad}" y="{int(height*0.78)}" width="220" height="60" rx="30" fill="{accent}"/>
   <text x="{pad + 32}" y="{int(height*0.78) + 38}" font-size="22" font-weight="800" fill="{bg}">{cta}</text>
-  {_hero_image_svg(payload, image_b64, hero_x, hero_y, hero_w, hero_h, wood, ink)}
+  {_hero_image_svg(payload, _first_poster_image(image_b64), hero_x, hero_y, hero_w, hero_h, wood, ink)}
 </svg>'''
 
 
@@ -1253,55 +1601,123 @@ TEMPLATE_BUILDERS = {
 }
 
 
-def create_svg_poster(payload: dict, copy_result: dict, *, image_b64: str | None = None) -> str:
+def create_svg_poster(
+    payload: dict,
+    copy_result: dict,
+    *,
+    image_b64: str | None = None,
+    image_b64s: list[str] | tuple[str, ...] | None = None,
+) -> str:
     template = payload.get("poster_template", "minimal_card")
     builder = TEMPLATE_BUILDERS.get(template, _minimal_card_svg)
-    return builder(payload, copy_result, image_b64)
+    image_input: PosterImageInput = image_b64s if image_b64s else image_b64
+    return builder(payload, copy_result, image_input)
 
 
-def save_poster_svg(*, payload: dict, copy_result: dict, poster_dir: Path, image_b64: str | None = None) -> dict:
+def save_poster_svg(
+    *,
+    payload: dict,
+    copy_result: dict,
+    poster_dir: Path,
+    image_b64: str | None = None,
+    image_b64s: list[str] | tuple[str, ...] | None = None,
+) -> dict:
     poster_dir.mkdir(parents=True, exist_ok=True)
     poster_name = f"poster_{uuid4().hex[:10]}.svg"
     poster_path = poster_dir / poster_name
-    poster_path.write_text(create_svg_poster(payload, copy_result, image_b64=image_b64), encoding="utf-8")
+    poster_path.write_text(
+        create_svg_poster(payload, copy_result, image_b64=image_b64, image_b64s=image_b64s),
+        encoding="utf-8",
+    )
     return {"poster_file": poster_name, "poster_path": poster_path}
 
 
-def _decode_local_image_to_b64(result: dict) -> str | None:
-    """Local image endpoints can return either {image_base64: '...'} or {data: [{b64_json: '...'}]} or {url: '...'}.
-    Normalize to a base64-encoded PNG string if possible.
+def _image_count_for_payload(payload: dict) -> int:
+    return 3 if payload.get("poster_template") == "grid_three" else 1
+
+
+def _grid_three_shot_plan(payload: dict) -> list[dict]:
+    product = sanitize_user_text(payload.get("product_name", "custom keyboard"), limit=80)
+    return [
+        {
+            "id": "hero",
+            "label": "제품 메인 컷",
+            "shot_type": "hero",
+            "instruction": f"full product hero shot of {product}, clean three-quarter angle",
+        },
+        {
+            "id": "detail",
+            "label": "키캡·스위치 디테일",
+            "shot_type": "detail_macro",
+            "instruction": "macro detail shot focused on keycap profile, switch, plate edge, case finish",
+        },
+        {
+            "id": "lifestyle",
+            "label": "데스크 무드 컷",
+            "shot_type": "eye_level",
+            "instruction": "lifestyle desk shot showing the keyboard in the actual desk setup ambience",
+        },
+    ]
+
+
+def _decode_local_images_to_b64(result: dict, *, limit: int = 3) -> list[str]:
+    """Normalize image endpoint responses to base64 PNG/JPEG strings.
+
+    Supports one-shot fields as well as OpenAI-style ``data[]`` and generic
+    ``images[]`` arrays. URLs are downloaded because the poster SVG embeds the
+    raster image directly.
     """
     if not isinstance(result, dict):
-        return None
-    for key in ("image_base64", "image_b64", "image"):
-        value = result.get(key)
+        return []
+    images: list[str] = []
+
+    def add_b64(value: object) -> None:
+        if len(images) >= limit:
+            return
         if isinstance(value, str) and value:
-            return value.split(",", 1)[-1] if value.startswith("data:") else value
-    data = result.get("data")
-    if isinstance(data, list) and data:
-        first = data[0]
-        if isinstance(first, dict):
-            for key in ("b64_json", "image_base64", "image"):
-                value = first.get(key)
-                if isinstance(value, str) and value:
-                    return value
-            url = first.get("url")
-            if isinstance(url, str) and url:
-                try:
-                    response = requests.get(url, timeout=20)
-                    response.raise_for_status()
-                    return base64.b64encode(response.content).decode("ascii")
-                except Exception:
-                    return None
-    url = result.get("url")
-    if isinstance(url, str) and url:
+            images.append(value.split(",", 1)[-1] if value.startswith("data:") else value)
+        elif isinstance(value, list):
+            for item in value:
+                add_b64(item)
+                if len(images) >= limit:
+                    break
+
+    def add_url(value: object) -> None:
+        if len(images) >= limit or not isinstance(value, str) or not value:
+            return
         try:
-            response = requests.get(url, timeout=20)
+            response = requests.get(value, timeout=20)
             response.raise_for_status()
-            return base64.b64encode(response.content).decode("ascii")
+            images.append(base64.b64encode(response.content).decode("ascii"))
         except Exception:
-            return None
-    return None
+            return
+
+    for key in ("image_base64", "image_b64", "image"):
+        add_b64(result.get(key))
+    for collection_key in ("data", "images"):
+        data = result.get(collection_key)
+        if not isinstance(data, list):
+            continue
+        for item in data:
+            if len(images) >= limit:
+                break
+            if isinstance(item, str):
+                add_b64(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            before_item = len(images)
+            for key in ("b64_json", "image_base64", "image"):
+                add_b64(item.get(key))
+            if len(images) == before_item:
+                add_url(item.get("url"))
+    add_url(result.get("url"))
+    return images[:limit]
+
+
+def _decode_local_image_to_b64(result: dict) -> str | None:
+    images = _decode_local_images_to_b64(result, limit=1)
+    return images[0] if images else None
 
 
 def generate_local_image_reference(payload: dict, image_prompt: str) -> dict | None:
@@ -1310,6 +1726,7 @@ def generate_local_image_reference(payload: dict, image_prompt: str) -> dict | N
         return None
     try:
         width, height = _image_dimensions(payload)
+        requested_count = _image_count_for_payload(payload)
         result = _request_json(
             settings.local_image_endpoint,
             headers={"Content-Type": "application/json"},
@@ -1318,15 +1735,25 @@ def generate_local_image_reference(payload: dict, image_prompt: str) -> dict | N
                 "metadata": payload,
                 "width": width,
                 "height": height,
+                "n": requested_count,
+                "shot_plan": _grid_three_shot_plan(payload) if requested_count > 1 else [],
             },
             timeout=max(settings.request_timeout_seconds, 90),
         )
     except Exception as exc:
         return {"provider": "local_image", "error": str(exc)}
-    image_b64 = _decode_local_image_to_b64(result)
-    summary: dict = {"provider": "local_image", "has_image": bool(image_b64)}
-    if image_b64:
-        summary["image_b64"] = image_b64
+    requested_count = _image_count_for_payload(payload)
+    image_b64s = _decode_local_images_to_b64(result, limit=requested_count)
+    summary: dict = {
+        "provider": "local_image",
+        "has_image": bool(image_b64s),
+        "requested_image_count": requested_count,
+        "image_count": len(image_b64s),
+    }
+    if image_b64s:
+        summary["image_b64"] = image_b64s[0]
+        if len(image_b64s) > 1:
+            summary["image_b64s"] = image_b64s
     else:
         # Surface a compact summary of the response to help debug.
         summary["raw_keys"] = list(result.keys()) if isinstance(result, dict) else []
@@ -1342,11 +1769,12 @@ def generate_openai_image_reference(payload: dict, image_prompt: str) -> dict | 
     try:
         width, height = _image_dimensions(payload)
         size = f"{width}x{height}" if width == height else "1024x1024"
+        requested_count = _image_count_for_payload(payload)
         request_payload = {
             "model": model,
             "prompt": image_prompt,
             "size": size,
-            "n": 1,
+            "n": requested_count,
             "response_format": "b64_json",
         }
         result = _request_json(
@@ -1392,10 +1820,19 @@ def generate_openai_image_reference(payload: dict, image_prompt: str) -> dict | 
             "has_image": False,
         }
 
-    image_b64 = _decode_local_image_to_b64(result)
-    summary: dict = {"provider": "openai_image", "model": model, "has_image": bool(image_b64)}
-    if image_b64:
-        summary["image_b64"] = image_b64
+    requested_count = _image_count_for_payload(payload)
+    image_b64s = _decode_local_images_to_b64(result, limit=requested_count)
+    summary: dict = {
+        "provider": "openai_image",
+        "model": model,
+        "has_image": bool(image_b64s),
+        "requested_image_count": requested_count,
+        "image_count": len(image_b64s),
+    }
+    if image_b64s:
+        summary["image_b64"] = image_b64s[0]
+        if len(image_b64s) > 1:
+            summary["image_b64s"] = image_b64s
     else:
         summary["raw_keys"] = list(result.keys()) if isinstance(result, dict) else []
     return summary
@@ -1447,7 +1884,10 @@ COMFYUI_TERMINAL_STATUSES = {"completed", "failed", "draft", "not_configured"}
 def safe_image_reference(image_reference: dict | None) -> dict | None:
     if not isinstance(image_reference, dict):
         return None
-    return {key: value for key, value in image_reference.items() if key != "image_b64"}
+    public = {key: value for key, value in image_reference.items() if key not in {"image_b64", "image_b64s"}}
+    if isinstance(image_reference.get("image_b64s"), list):
+        public["image_count"] = len(image_reference["image_b64s"])
+    return public
 
 
 def _image_dimensions(payload: dict) -> tuple[int, int]:
@@ -1592,25 +2032,33 @@ def _comfyui_image_url(base_url: str, image: dict) -> str:
     return f"{base_url.rstrip('/')}/view?{query}"
 
 
-def _download_comfyui_image_reference(job_id: str, image_url: str) -> dict:
-    try:
-        response = requests.get(image_url, timeout=30)
-        response.raise_for_status()
-    except Exception as exc:
-        return {
-            "provider": "comfyui",
-            "job_id": job_id,
-            "has_image": False,
-            "source_url": image_url,
-            "error": str(exc),
-        }
-    return {
+def _download_comfyui_images_reference(job_id: str, image_urls: list[str], *, limit: int = 3) -> dict:
+    image_b64s: list[str] = []
+    source_urls: list[str] = []
+    errors: list[str] = []
+    for image_url in image_urls[:limit]:
+        try:
+            response = requests.get(image_url, timeout=30)
+            response.raise_for_status()
+            image_b64s.append(base64.b64encode(response.content).decode("ascii"))
+            source_urls.append(image_url)
+        except Exception as exc:
+            errors.append(f"{image_url}: {exc}")
+    reference: dict = {
         "provider": "comfyui",
         "job_id": job_id,
-        "has_image": True,
-        "image_b64": base64.b64encode(response.content).decode("ascii"),
-        "source_url": image_url,
+        "has_image": bool(image_b64s),
+        "image_count": len(image_b64s),
+        "source_urls": source_urls,
     }
+    if image_b64s:
+        reference["image_b64"] = image_b64s[0]
+        if len(image_b64s) > 1:
+            reference["image_b64s"] = image_b64s
+        reference["source_url"] = source_urls[0]
+    if errors:
+        reference["errors"] = errors[:3]
+    return reference
 
 
 # 중단·유실되어 queued/running 으로 굳은 좀비 job이 VRAM 해제를 영구 차단하지
@@ -1730,8 +2178,9 @@ def poll_image_job(job_id: str) -> dict | None:
                 images.append(image_record)
         if images:
             job.update({"status": "completed", "images": images, "completed_at": int(time.time())})
-            if images[0].get("url"):
-                job["local_image_reference"] = _download_comfyui_image_reference(job_id, images[0]["url"])
+            image_urls = [image.get("url") for image in images if image.get("url")]
+            if image_urls:
+                job["local_image_reference"] = _download_comfyui_images_reference(job_id, image_urls)
         else:
             job["status"] = "running"
     except Exception as exc:
@@ -1748,6 +2197,8 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
 
     settings = get_settings()
     width, height = _image_dimensions(payload)
+    # 요청 비율을 job에 실어야 quality_gate가 결과 해상도와 대조 가능(없으면 비율검증 dead).
+    requested_ratio = sanitize_user_text(payload.get("image_ratio", "1:1"), limit=10) or "1:1"
 
     selected_workflow = _select_workflow_path(payload)
     cache_key = make_image_cache_key(
@@ -1768,7 +2219,7 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
         "width": width,
         "height": height,
         "prompt_preview": image_prompt[:700],
-        "backend_config": _image_backend_config(),
+        "backend_config": {**_image_backend_config(), "aspect_ratio": requested_ratio},
     }
     backend = settings.image_model_backend.lower()
 
@@ -1830,29 +2281,25 @@ def image_reference_from_job(job_id: str) -> dict | None:
 
     local_reference = job.get("local_image_reference")
     if isinstance(local_reference, dict) and local_reference.get("image_b64"):
-        return {
+        reference = {
             "provider": job.get("provider", "local_image"),
             "job_id": job_id,
             "has_image": True,
             "image_b64": local_reference["image_b64"],
+            "image_count": int(local_reference.get("image_count") or 1),
         }
+        if isinstance(local_reference.get("image_b64s"), list):
+            reference["image_b64s"] = local_reference["image_b64s"][:3]
+            reference["image_count"] = len(reference["image_b64s"])
+        return reference
 
     images = job.get("images") or []
     if images:
-        first_url = images[0].get("url")
-        if first_url:
-            try:
-                response = requests.get(first_url, timeout=30)
-                response.raise_for_status()
-                return {
-                    "provider": job.get("provider", "comfyui"),
-                    "job_id": job_id,
-                    "has_image": True,
-                    "image_b64": base64.b64encode(response.content).decode("ascii"),
-                    "source_url": first_url,
-                }
-            except Exception as exc:
-                return {"provider": job.get("provider", "comfyui"), "job_id": job_id, "error": str(exc)}
+        image_urls = [image.get("url") for image in images if isinstance(image, dict) and image.get("url")]
+        if image_urls:
+            reference = _download_comfyui_images_reference(job_id, image_urls)
+            reference["provider"] = job.get("provider", "comfyui")
+            return reference
 
     return {
         "provider": job.get("provider", "image_job"),

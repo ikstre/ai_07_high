@@ -1,0 +1,25 @@
+# 시크릿 커밋 차단 훅. 설치:  pre-commit install
+#
+# tools/scan_secrets.py(stdlib only)를 두 단계로 건다.
+#  1) staged 파일 스캔 — 커밋에 실제로 들어가는 변경분에서 sk-/ssh-rsa/ghp_ 등
+#     토큰형 문자열·민감 KEY=값을 차단(차단=커밋 실패).
+#  2) 전체 트리(tracked + untracked) 스캔 — `git add` 안 한 채 레포에 떨어진
+#     키 파일(예: 공개키.md 라이브 키 노출)도 잡도록 --tree로 working tree 전체를 본다.
+#     gitignore된 로컬 전용 파일(.env 등)은 제외.
+repos:
+  - repo: local
+    hooks:
+      - id: scan-secrets-staged
+        name: scan secrets (staged)
+        entry: python3 deskad_keyboard_demo/tools/scan_secrets.py
+        language: system
+        pass_filenames: true
+        require_serial: true
+        types: [text]
+      - id: scan-secrets-tree
+        name: scan secrets (full working tree)
+        entry: python3 deskad_keyboard_demo/tools/scan_secrets.py --tree
+        language: system
+        pass_filenames: false
+        always_run: true
+        require_serial: true

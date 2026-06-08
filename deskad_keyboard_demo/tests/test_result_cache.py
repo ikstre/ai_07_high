@@ -70,9 +70,13 @@ def test_cache_hit_bumps_recency_and_survives_lru(tmp_path, monkeypatch):
 
 def test_image_cache_excludes_binary_bytes(tmp_path, monkeypatch):
     monkeypatch.setenv("GPU_WORKER_CACHE_DIR", str(tmp_path))
-    result_cache.put_image_cache("job1", {"status": "done", "image_b64": "AAAA", "seed": 7})
+    result_cache.put_image_cache(
+        "job1",
+        {"status": "done", "image_b64": "AAAA", "image_b64s": ["AAAA", "BBBB"], "seed": 7},
+    )
 
     cached = result_cache.get_image_cache("job1")
     assert cached["status"] == "done"
     assert cached["seed"] == 7
     assert "image_b64" not in cached  # heavy bytes never persisted to disk
+    assert "image_b64s" not in cached

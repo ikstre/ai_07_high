@@ -4,7 +4,7 @@ import logging
 import os
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -22,6 +22,17 @@ def _retry_settings() -> tuple[int, float, float]:
     base_backoff = max(0.0, float(os.getenv("LLM_RETRY_BACKOFF_SECONDS", "0.5")))
     max_backoff = max(base_backoff, float(os.getenv("LLM_RETRY_MAX_BACKOFF_SECONDS", "8")))
     return max_retries, base_backoff, max_backoff
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _llm_max_tokens() -> int:
+    return max(0, _int_env("LLM_MAX_TOKENS", 1024))
 
 
 def _post_with_retry(url: str, *, headers: dict, json: dict, timeout: int, provider: str) -> requests.Response:
@@ -60,6 +71,23 @@ def _post_with_retry(url: str, *, headers: dict, json: dict, timeout: int, provi
     raise RuntimeError(f"[{provider}] request failed with no response")
 
 
+def _message_text(content) -> str:
+    """OpenAI 멀티모달 content(str 또는 part 리스트)에서 텍스트만 추출한다.
+
+    이미지 part(image_url)는 멀티모달 미지원 경로(single_user flatten 등)에서 버린다.
+    """
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        texts = [
+            str(part.get("text", "")).strip()
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        ]
+        return "\n".join(t for t in texts if t)
+    return ""
+
+
 def normalize_chat_completions_url(base_url: str) -> str:
     base = base_url.rstrip("/")
     if base.endswith("/chat/completions"):
@@ -88,6 +116,7 @@ class ChatCompletionAdapter:
     require_api_key: bool = False
     json_response_format: bool = False
     prompt_format: str = "chat"
+    supports_vision: bool = False
 
     @property
     def available(self) -> bool:
@@ -115,7 +144,9 @@ class ChatCompletionAdapter:
             {"role": "user", "content": user_prompt},
         ]
         if self.prompt_format == "single_user":
-            flattened = "\n\n".join(str(message.get("content", "")) for message in request_messages if message.get("content"))
+            flattened = "\n\n".join(
+                text for message in request_messages if (text := _message_text(message.get("content")))
+            )
             request_messages = [{"role": "user", "content": flattened}]
 
         body: dict = {
@@ -123,6 +154,9 @@ class ChatCompletionAdapter:
             "temperature": 0.7 if temperature is None else temperature,
             "messages": request_messages,
         }
+        max_tokens = _llm_max_tokens()
+        if max_tokens:
+            body["max_tokens"] = max_tokens
         if self.json_response_format:
             body["response_format"] = {"type": "json_object"}
 
@@ -154,7 +188,7 @@ class HyperClovaDirectAdapter:
     apigw_key: str = ""
     request_id_prefix: str = "deskad"
     default_model: str = "HCX-005"
-    max_tokens: int = 512
+    max_tokens: int = field(default_factory=lambda: _int_env("HYPERCLOVA_DIRECT_MAX_TOKENS", _llm_max_tokens()))
     temperature: float = 0.5
     top_p: float = 0.8
     repeat_penalty: float = 1.2

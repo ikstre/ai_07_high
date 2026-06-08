@@ -124,7 +124,7 @@ def current_product_export_payload() -> dict:
     }
 
 def generate_copy() -> None:
-    st.session_state.copy_result = api_post("/ai/copy", build_ad_payload(), timeout=45)
+    st.session_state.copy_result = api_post("/ai/copy", build_ad_payload(), timeout=180)
     st.session_state.copy_selected_provider = st.session_state.copy_result.get("provider")
 
 def generate_copy_experiment() -> None:
@@ -136,18 +136,18 @@ def generate_copy_experiment() -> None:
     if "fallback" not in providers:
         providers.append("fallback")
     payload = {**build_ad_payload(), "providers": providers or ["fallback"]}
-    st.session_state.copy_experiment_result = api_post("/ai/copy/experiment", payload, timeout=90)
+    st.session_state.copy_experiment_result = api_post("/ai/copy/experiment", payload, timeout=300)
     st.session_state.copy_result = None
     st.session_state.copy_selected_provider = None
 
 def generate_poster() -> None:
-    data = api_post("/ai/poster", build_ad_payload(), timeout=60)
+    data = api_post("/ai/poster", build_ad_payload(), timeout=300)
     st.session_state.poster_result = data
     st.session_state.copy_result = data["copy"]
     st.session_state.copy_selected_provider = data["copy"].get("provider")
 
 def generate_image_job() -> None:
-    data = api_post("/ai/image/jobs", build_ad_payload(), timeout=60)
+    data = api_post("/ai/image/jobs", build_ad_payload(), timeout=180)
     st.session_state.image_job_result = data
     copy_result = data.get("copy") if isinstance(data, dict) else None
     if isinstance(copy_result, dict):

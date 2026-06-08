@@ -58,7 +58,7 @@ DEFAULTS = {
     "image_quality_report": None,
     "image_polling_enabled": False,
     "image_poll_started_at": None,
-    "image_poll_timeout_seconds": 180,
+    "image_poll_timeout_seconds": 600,
     "ui_theme_mode": DEFAULT_THEME_MODE,
     "ad_tone": "감성형",
     "image_ratio": "1:1",

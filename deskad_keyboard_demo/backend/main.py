@@ -17,6 +17,7 @@ from .ai import (
     generate_image_reference as generate_ai_image_reference,
     image_reference_from_job,
     poll_image_job,
+    public_image_job,
     safe_image_reference,
     save_poster_svg,
     selected_copy_or_generate,
@@ -355,7 +356,11 @@ def get_image_generation_job(job_id: str):
 def list_image_generation_jobs(limit: int = 20):
     items = list(IMAGE_JOB_STORE.all().values())
     items.sort(key=lambda record: record.get("created_at", 0), reverse=True)
-    return {"jobs": items[: max(1, min(limit, 200))], "store_path": str(IMAGE_JOB_STORE.path)}
+    capped = items[: max(1, min(limit, 200))]
+    # 목록에선 이미지 바이트(local_image_reference.image_b64/_b64s) 제외 — 수십 MB 응답 방지.
+    # 실제 바이트는 단건 조회(/ai/image/jobs/{id})에서만 내려간다.
+    jobs = [public_image_job(job) for job in capped]
+    return {"jobs": jobs, "store_path": str(IMAGE_JOB_STORE.path)}
 
 
 @app.post("/ai/image/jobs/{job_id}/quality")
@@ -401,13 +406,18 @@ def generate_poster(request: AdContentRequest):
         image_reference = generate_ai_image_reference(payload, image_prompt)
 
     image_b64 = None
+    image_b64s = None
     if isinstance(image_reference, dict) and image_reference.get("has_image"):
         image_b64 = image_reference.get("image_b64")
+        raw_image_b64s = image_reference.get("image_b64s")
+        if isinstance(raw_image_b64s, list):
+            image_b64s = [item for item in raw_image_b64s if isinstance(item, str) and item][:3]
     poster_meta = save_poster_svg(
         payload=payload,
         copy_result=copy_result,
         poster_dir=POSTER_DIR,
         image_b64=image_b64,
+        image_b64s=image_b64s,
     )
 
     safe_reference = safe_image_reference(image_reference)
@@ -420,5 +430,6 @@ def generate_poster(request: AdContentRequest):
         "poster_template": payload.get("poster_template", "minimal_card"),
         "image_reference": safe_reference,
         "image_job_id": request.image_job_id,
-        "image_embedded": bool(image_b64),
+        "image_embedded": bool(image_b64 or image_b64s),
+        "image_count": len(image_b64s) if image_b64s else (1 if image_b64 else 0),
     }

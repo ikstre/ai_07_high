@@ -23,15 +23,45 @@ DEFAULT_MODEL = "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B"
 MODEL_ID = os.getenv("HYPERCLOVA_SEED_MODEL") or os.getenv("HYPERCLOVA_MODEL") or DEFAULT_MODEL
 HOST = os.getenv("HYPERCLOVA_SEED_HOST", "127.0.0.1")
 PORT = int(os.getenv("HYPERCLOVA_SEED_PORT", "11501"))
-MAX_NEW_TOKENS = int(os.getenv("HYPERCLOVA_SEED_MAX_NEW_TOKENS", "512"))
+MAX_NEW_TOKENS = int(os.getenv("HYPERCLOVA_SEED_MAX_NEW_TOKENS", "1024"))
 TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or None
 DEVICE = os.getenv("HYPERCLOVA_SEED_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 DEVICE_MAP = os.getenv("HYPERCLOVA_SEED_DEVICE_MAP", "")
+LOAD_IN_4BIT = os.getenv("HYPERCLOVA_SEED_LOAD_IN_4BIT", "").strip().lower() in {"1", "true", "yes", "on"}
+LOAD_IN_8BIT = os.getenv("HYPERCLOVA_SEED_LOAD_IN_8BIT", "").strip().lower() in {"1", "true", "yes", "on"}
+TORCH_DTYPE = os.getenv("HYPERCLOVA_SEED_TORCH_DTYPE", "auto").strip().lower()
+BNB_4BIT_QUANT_TYPE = os.getenv("HYPERCLOVA_SEED_BNB_4BIT_QUANT_TYPE", "nf4")
+BNB_4BIT_USE_DOUBLE_QUANT = os.getenv("HYPERCLOVA_SEED_BNB_4BIT_USE_DOUBLE_QUANT", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+TRUST_REMOTE_CODE = os.getenv("HYPERCLOVA_SEED_TRUST_REMOTE_CODE", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    # str 또는 OpenAI 멀티모달 part 리스트([{type:text,...},{type:image_url,...}]).
+    # 이 서버는 현재 텍스트 전용이라 image_url part는 무시하고 텍스트만 취한다.
+    content: str | list
+
+
+def _content_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
 
 
 class ChatCompletionRequest(BaseModel):
@@ -48,13 +78,58 @@ app = FastAPI(title="HyperCLOVA X SEED OpenAI-compatible server")
 _generate_lock = Lock()
 
 
+def _torch_dtype(value: str):
+    if value in {"", "auto"}:
+        return "auto"
+    aliases = {
+        "fp16": torch.float16,
+        "float16": torch.float16,
+        "half": torch.float16,
+        "bf16": torch.bfloat16,
+        "bfloat16": torch.bfloat16,
+        "fp32": torch.float32,
+        "float32": torch.float32,
+    }
+    if value not in aliases:
+        raise RuntimeError(f"Unsupported HYPERCLOVA_SEED_TORCH_DTYPE: {value}")
+    return aliases[value]
+
+
+def _quantization_config():
+    if LOAD_IN_4BIT and LOAD_IN_8BIT:
+        raise RuntimeError("Set only one of HYPERCLOVA_SEED_LOAD_IN_4BIT or HYPERCLOVA_SEED_LOAD_IN_8BIT.")
+    if not (LOAD_IN_4BIT or LOAD_IN_8BIT):
+        return None
+    try:
+        from transformers import BitsAndBytesConfig
+    except ImportError as exc:
+        raise RuntimeError(
+            "Install bitsandbytes and accelerate to use HyperCLOVA SEED quantized loading."
+        ) from exc
+    if LOAD_IN_8BIT:
+        return BitsAndBytesConfig(load_in_8bit=True)
+    compute_dtype = _torch_dtype(TORCH_DTYPE)
+    if compute_dtype == "auto":
+        compute_dtype = torch.float16
+    return BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type=BNB_4BIT_QUANT_TYPE,
+        bnb_4bit_compute_dtype=compute_dtype,
+        bnb_4bit_use_double_quant=BNB_4BIT_USE_DOUBLE_QUANT,
+    )
+
+
 def _load_model():
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, token=TOKEN)
-    kwargs: dict = {"token": TOKEN, "torch_dtype": "auto"}
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, token=TOKEN, trust_remote_code=TRUST_REMOTE_CODE)
+    quantization_config = _quantization_config()
+    kwargs: dict = {"token": TOKEN, "trust_remote_code": TRUST_REMOTE_CODE, "torch_dtype": _torch_dtype(TORCH_DTYPE)}
+    if quantization_config is not None:
+        kwargs["quantization_config"] = quantization_config
+        kwargs["device_map"] = DEVICE_MAP or "auto"
     if DEVICE_MAP:
         kwargs["device_map"] = DEVICE_MAP
     model = AutoModelForCausalLM.from_pretrained(MODEL_ID, **kwargs)
-    if not DEVICE_MAP:
+    if not DEVICE_MAP and quantization_config is None:
         model = model.to(DEVICE)
     model.eval()
     return tokenizer, model
@@ -86,6 +161,7 @@ def health() -> dict:
         "model": MODEL_ID,
         "device": str(_model_device()),
         "device_map": DEVICE_MAP or "single",
+        "quantization": "4bit" if LOAD_IN_4BIT else "8bit" if LOAD_IN_8BIT else "none",
     }
 
 
@@ -109,7 +185,7 @@ def chat_completions(request: ChatCompletionRequest) -> dict:
     if not request.messages:
         raise HTTPException(status_code=400, detail="messages must not be empty")
 
-    messages = [message.model_dump() for message in request.messages]
+    messages = [{"role": m.role, "content": _content_text(m.content)} for m in request.messages]
     max_new_tokens = request.max_completion_tokens or request.max_tokens or MAX_NEW_TOKENS
     inputs = tokenizer.apply_chat_template(
         messages,
