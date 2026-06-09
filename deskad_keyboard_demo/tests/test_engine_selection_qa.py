@@ -8,6 +8,20 @@ import io
 from PIL import Image
 
 from backend import ai
+from backend.llm_adapters import _max_tokens_param
+
+
+# ── OpenAI GPT-5 계열 토큰 파라미터 ────────────────────────────────────────
+def test_gpt5_family_uses_completion_tokens_param():
+    # GPT-5/o1·o3·o4 계열은 max_completion_tokens, 그 외는 max_tokens.
+    assert _max_tokens_param("gpt-5.4-mini") == "max_completion_tokens"
+    assert _max_tokens_param("gpt-5.4") == "max_completion_tokens"
+    assert _max_tokens_param("o3-mini") == "max_completion_tokens"
+    assert _max_tokens_param("gpt-4o-mini") == "max_tokens"
+    assert _max_tokens_param("HCX-005") == "max_tokens"
+    # 경로형(org/model)도 처리
+    assert _max_tokens_param("openai/gpt-5.4") == "max_completion_tokens"
+    assert _max_tokens_param("kakaocorp/kanana-2") == "max_tokens"
 
 
 # ── 엔진 → provider / backend 매핑 ─────────────────────────────────────────

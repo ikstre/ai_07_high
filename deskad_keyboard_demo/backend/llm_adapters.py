@@ -35,6 +35,17 @@ def _llm_max_tokens() -> int:
     return max(0, _int_env("LLM_MAX_TOKENS", 1024))
 
 
+# GPT-5 / o1·o3·o4 계열은 `max_tokens`를 거부하고 `max_completion_tokens`만 받는다.
+# (그 외 모델·로컬 OpenAI 호환 서버는 기존대로 `max_tokens`.)
+_COMPLETION_TOKENS_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _max_tokens_param(model: str) -> str:
+    name = (model or "").strip().lower()
+    base = name.rsplit("/", 1)[-1]  # "org/gpt-5.4-mini" 같은 경로형도 처리
+    return "max_completion_tokens" if base.startswith(_COMPLETION_TOKENS_PREFIXES) else "max_tokens"
+
+
 def _post_with_retry(url: str, *, headers: dict, json: dict, timeout: int, provider: str) -> requests.Response:
     """POST with exponential backoff + jitter on transient failures.
 
@@ -156,7 +167,7 @@ class ChatCompletionAdapter:
         }
         max_tokens = _llm_max_tokens()
         if max_tokens:
-            body["max_tokens"] = max_tokens
+            body[_max_tokens_param(self.model or self.default_model)] = max_tokens
         if self.json_response_format:
             body["response_format"] = {"type": "json_object"}
 
