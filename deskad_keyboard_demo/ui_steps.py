@@ -6,6 +6,8 @@ from typing import Any
 
 import streamlit as st
 
+from ui.state import PRODUCT_FIELD_ERROR_KEY, missing_product_fields
+
 
 PRODUCT_TYPE_OPTIONS = ["커스텀 키보드", "키캡", "데스크매트", "데스크 조명", "모니터암", "데스크 소품", "번들 셋업"]
 TARGET_CHANNEL_OPTIONS = ["인스타그램", "스마트스토어", "상세페이지", "쿠팡 썸네일", "배너 광고", "네이버 검색광고", "카카오 채널", "유튜브 쇼츠"]
@@ -121,21 +123,27 @@ def render_step_input_panel(ctx: dict[str, Any]) -> None:
 
 def _render_product_info_step() -> None:
     st.markdown("#### 상품 정보")
+    if st.session_state.get(PRODUCT_FIELD_ERROR_KEY):
+        st.error(st.session_state[PRODUCT_FIELD_ERROR_KEY])
     st.session_state.product_type = st.selectbox(
         "상품 유형",
         PRODUCT_TYPE_OPTIONS,
         index=_option_index(PRODUCT_TYPE_OPTIONS, st.session_state.product_type),
     )
-    st.session_state.product_name = st.text_input("상품명", st.session_state.product_name)
-    st.session_state.price = st.text_input("판매가", st.session_state.price)
+    st.session_state.product_name = st.text_input("상품명", st.session_state.product_name, placeholder="예: 커스텀 키보드")
+    st.session_state.price = st.text_input("판매가", st.session_state.price, placeholder="예: 189,000원")
     st.session_state.target_channel = st.selectbox(
         "판매 채널",
         TARGET_CHANNEL_OPTIONS,
         index=_option_index(TARGET_CHANNEL_OPTIONS, st.session_state.target_channel),
     )
-    st.session_state.target_customer = st.text_input("타깃 고객", st.session_state.target_customer)
-    st.session_state.selling_point = st.text_area("핵심 특징", st.session_state.selling_point, height=95)
-
+    st.session_state.target_customer = st.text_input("타깃 고객", st.session_state.target_customer, placeholder="예: 깔끔한 데스크 셋업을 원하는 직장인")
+    st.session_state.selling_point = st.text_area("핵심 특징", st.session_state.selling_point, height=95, placeholder="예: 조용한 타건감, 크림 톤 키캡, 작은 책상에도 잘 맞는 65% 배열")
+    missing = missing_product_fields()
+    if missing:
+        st.caption(f"필수 입력값: {', '.join(missing)}")
+    else:
+        st.session_state.pop(PRODUCT_FIELD_ERROR_KEY, None)
 
 def _render_drawing_data_step(ctx: dict[str, Any]) -> None:
     st.markdown("#### 도면/제품 데이터")
@@ -331,10 +339,21 @@ def _render_virtual_setup_step(ctx: dict[str, Any]) -> None:
     )
 
     if st.button("3D 데스크 셋업 생성", type="primary", use_container_width=True):
+        progress = st.progress(0, text="3D 셋업 생성 준비 중")
+        status = st.empty()
         try:
+            status.info("25% · 셋업 옵션과 배치 구성을 정리하는 중")
+            progress.progress(25, text="셋업 옵션 정리 중")
+            status.info("60% · GLB 모델과 이미지 구도 데이터를 생성하는 중")
+            progress.progress(60, text="GLB 모델 생성 중")
             ctx["render_desk_setup"]()
+            status.success("100% · 3D GLB 생성 완료")
+            progress.progress(100, text="3D GLB 생성 완료")
             st.success("3D GLB 생성 완료")
+            st.rerun()
         except Exception as exc:
+            progress.empty()
+            status.empty()
             st.error(f"렌더링 실패: {exc}")
 
     # 새로 생성하는 대신 이전 생성 결과나 공용/외부 모델을 불러올 수 있게 한다.
@@ -541,23 +560,44 @@ def _render_ad_content_step(ctx: dict[str, Any]) -> None:
 
     col_copy, col_image, col_poster = st.columns(3)
     if col_copy.button("광고 문구 생성", type="secondary", use_container_width=True):
+        progress = st.progress(0, text="광고 문구 생성 준비 중")
         try:
+            progress.progress(30, text="엔진별 문구 후보 생성 중")
             ctx["generate_copy_experiment"]()
+            progress.progress(100, text="광고 문구 생성 완료")
             st.success("광고 문구 후보 생성 완료")
+            st.rerun()
         except Exception as exc:
+            progress.empty()
             st.error(f"문구 생성 실패: {exc}")
     if col_image.button("실사 이미지 작업", type="secondary", use_container_width=True):
+        progress = st.progress(0, text="이미지 작업 요청 준비 중")
         try:
+            progress.progress(35, text="이미지 생성 작업 등록 중")
             ctx["generate_image_job"]()
+            progress.progress(100, text="이미지 작업 등록 완료")
             st.success("이미지 작업 생성 완료")
+            st.rerun()
         except Exception as exc:
+            progress.empty()
             st.error(f"이미지 작업 실패: {exc}")
     poster_disabled = ctx["poster_waiting_for_image"]()
     if col_poster.button("포스터 생성", type="primary", use_container_width=True, disabled=poster_disabled):
+        progress = st.progress(0, text="포스터 생성 준비 중")
+        status = st.empty()
         try:
+            status.info("15% · 선택한 템플릿과 문구를 정리하는 중")
+            progress.progress(15, text="선택한 템플릿과 문구 정리 중")
+            status.info("45% · 광고 이미지와 SVG 포스터를 생성하는 중")
+            progress.progress(45, text="광고 이미지와 SVG 포스터 생성 중")
             ctx["generate_poster"]()
+            status.success("100% · 포스터 생성 완료")
+            progress.progress(100, text="포스터 생성 완료")
             st.success("포스터 생성 완료")
+            st.rerun()
         except Exception as exc:
+            progress.empty()
+            status.empty()
             st.error(f"포스터 생성 실패: {exc}")
     if poster_disabled:
         st.caption("이미지 작업이 완료되면 포스터 생성이 활성화됩니다.")

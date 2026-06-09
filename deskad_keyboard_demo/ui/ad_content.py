@@ -8,7 +8,7 @@ import time
 import streamlit as st
 
 from .api_client import api_get, api_post
-from .constants import IMAGE_JOB_TERMINAL_STATUSES, PROVIDER_LABELS
+from .constants import IMAGE_JOB_TERMINAL_STATUSES, POSTER_TEMPLATE_LABELS, PROVIDER_LABELS
 from .rendering import build_render_payload
 
 def current_image_job_id() -> str | None:
@@ -82,6 +82,21 @@ def selected_copy_payload(copy_result: dict | None) -> dict | None:
         return None
     return selected
 
+def first_successful_copy(experiment_result: dict | None) -> tuple[str | None, dict | None]:
+    if not isinstance(experiment_result, dict):
+        return None, None
+    for item in experiment_result.get("results") or []:
+        if item.get("status") != "ok":
+            continue
+        copy = item.get("copy")
+        if not isinstance(copy, dict):
+            continue
+        provider = item.get("provider") or copy.get("provider")
+        selected = selected_copy_payload({**copy, "provider": provider})
+        if selected:
+            return provider, selected
+    return None, None
+
 def _copy_editor_signature(copy_result: dict | None) -> tuple[str, str, str, str]:
     if not isinstance(copy_result, dict):
         return ("", "", "", "")
@@ -142,8 +157,9 @@ def generate_copy_experiment() -> None:
     # not_configured로 표시돼 어떤 트랙이 활성인지 한눈에 보인다.
     payload = {**build_ad_payload(), "providers": ["openai", "hyperclova", "local", "fallback"]}
     st.session_state.copy_experiment_result = api_post("/ai/copy/experiment", payload, timeout=300)
-    st.session_state.copy_result = None
-    st.session_state.copy_selected_provider = None
+    provider, selected = first_successful_copy(st.session_state.copy_experiment_result)
+    st.session_state.copy_result = selected
+    st.session_state.copy_selected_provider = provider
 
 def generate_poster() -> None:
     data = api_post("/ai/poster", build_ad_payload(), timeout=300)
@@ -310,21 +326,56 @@ def render_ad_card_preview_section() -> None:
     with ad_left:
         st.markdown("#### 광고 카드 미리보기")
         result = st.session_state.copy_result or {}
-        headline = result.get("headline") or st.session_state.product_name
-        subcopy = result.get("subcopy") or st.session_state.selling_point
+        product_name = str(st.session_state.get("product_name") or "").strip() or "상품명을 입력해주세요"
+        selling_point = str(st.session_state.get("selling_point") or "").strip()
+        price = str(st.session_state.get("price") or "").strip() or "가격 미입력"
+        target_channel = str(st.session_state.get("target_channel") or "").strip() or "채널 미입력"
+        headline = result.get("headline") or product_name
+        subcopy = result.get("subcopy") or selling_point or "핵심 특징을 입력하면 광고 문구가 표시됩니다."
         cta = result.get("cta") or "자세히 보기"
         copies = result.get("copies") or []
-        bullet_html = "".join(f"<li>{html.escape(str(copy))}</li>" for copy in copies[:3])
+        bullet_html = "".join(f"<li>{html.escape(str(copy))}</li>" for copy in copies[:3] if str(copy).strip())
         if not bullet_html:
-            bullet_html = f"<li>{html.escape(st.session_state.selling_point)}</li>"
+            fallback_bullet = selling_point or "상품의 장점을 입력하면 여기에 표시됩니다."
+            bullet_html = f"<li>{html.escape(fallback_bullet)}</li>"
+        template_key = st.session_state.get("poster_template", "minimal_card")
+        template_label = POSTER_TEMPLATE_LABELS.get(template_key, template_key)
+        template_note = html.escape(str(template_label).split(" (")[0])
+        side_panel = ""
+        if template_key == "grid_three":
+            side_panel = """
+              <div class="ad-preview-grid">
+                <span></span><span></span><span></span>
+              </div>
+            """
+        elif template_key == "feature_focus":
+            side_panel = f"""
+              <aside class="ad-preview-spec">
+                <strong>SPECS</strong>
+                <ul>{bullet_html}</ul>
+              </aside>
+            """
+        elif template_key == "promo_banner":
+            side_panel = f"""
+              <div class="ad-preview-promo">
+                <strong>{html.escape(price)}</strong>
+                <span>{html.escape(target_channel)}</span>
+              </div>
+            """
         st.markdown(
             f"""
-            <div class="ad-preview-card">
-              <h3>{html.escape(str(headline))}</h3>
-              <p class="subcopy">{html.escape(str(subcopy))}</p>
-              <ul>{bullet_html}</ul>
-              <div class="meta">{html.escape(str(st.session_state.price))} · {html.escape(str(st.session_state.target_channel))}</div>
-              <span class="cta">{html.escape(str(cta))}</span>
+            <div class="ad-preview-card ad-preview-card--{html.escape(str(template_key))}">
+              <div class="template-badge">{template_note}</div>
+              <div class="ad-preview-main">
+                <div>
+                  <h3>{html.escape(str(headline))}</h3>
+                  <p class="subcopy">{html.escape(str(subcopy))}</p>
+                  <ul>{bullet_html}</ul>
+                  <div class="meta">{html.escape(price)} · {html.escape(target_channel)}</div>
+                  <span class="cta">{html.escape(str(cta))}</span>
+                </div>
+                {side_panel}
+              </div>
             </div>
             """,
             unsafe_allow_html=True,

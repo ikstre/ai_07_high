@@ -179,11 +179,7 @@ def _render_step_content(ctx: dict, go_previous, go_next) -> None:
     current_step = int(st.session_state.step)
 
     if current_step < 3:
-        edit_col, preview_col = st.columns([0.62, 0.38], gap="large")
-        with edit_col:
-            _render_edit_panel(ctx, go_previous, go_next)
-        with preview_col:
-            _render_input_guide(current_step)
+        _render_edit_panel(ctx, go_previous, go_next)
         return
 
     if current_step == 3:

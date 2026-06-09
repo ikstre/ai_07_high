@@ -86,29 +86,16 @@ def render_step_progress() -> None:
     st.progress(current / total, text=f"{current} / {total} — {STEP_LABELS[current]}")
 
 def render_campaign_studio_header() -> None:
-    stage_cards = []
-    stage_descriptions = {
-        1: "상품명, 가격, 타깃을 정리",
-        2: "도면과 키보드 스펙 연결",
-        3: "3D 데스크 씬 구성",
-        4: "카피, 이미지, 포스터 제작",
-    }
-    for step_id, label in STEP_LABELS.items():
-        active = " active" if step_id == st.session_state.step else ""
-        stage_cards.append(
-            f'<div class="studio-stage{active}">'
-            f'<div class="stage-num">STEP {step_id}</div>'
-            f'<div class="stage-title">{html.escape(label)}</div>'
-            f'<div class="stage-desc">{html.escape(stage_descriptions[step_id])}</div>'
-            f'</div>'
-        )
-
+    product_name = str(st.session_state.get("product_name") or "").strip() or "상품 정보를 입력해주세요"
+    target_customer = str(st.session_state.get("target_customer") or "").strip() or "타깃 고객 미입력"
+    price = str(st.session_state.get("price") or "").strip() or "가격 미입력"
+    target_channel = str(st.session_state.get("target_channel") or "").strip() or "채널 미입력"
     st.markdown(
         f"""
         <section class="studio-hero">
           <div>
             <div class="studio-kicker">Campaign Production Studio</div>
-            <h1>{html.escape(str(st.session_state.product_name))}</h1>
+            <h1>{html.escape(product_name)}</h1>
             <p>
               제품 정보와 3D 데스크 씬을 하나의 캠페인 브리프로 묶고,
               광고 문구, 실사 이미지 작업, 포스터 결과물을 같은 화면에서 검수하는 제작형 UI입니다.
@@ -116,13 +103,12 @@ def render_campaign_studio_header() -> None:
           </div>
           <div class="studio-brief-card">
             <strong>현재 캠페인 브리프</strong>
-            <div class="studio-brief-row"><span>채널</span><span>{html.escape(str(st.session_state.target_channel))}</span></div>
-            <div class="studio-brief-row"><span>타깃</span><span>{html.escape(str(st.session_state.target_customer))}</span></div>
-            <div class="studio-brief-row"><span>가격</span><span>{html.escape(str(st.session_state.price))}</span></div>
+            <div class="studio-brief-row"><span>채널</span><span>{html.escape(target_channel)}</span></div>
+            <div class="studio-brief-row"><span>타깃</span><span>{html.escape(target_customer)}</span></div>
+            <div class="studio-brief-row"><span>가격</span><span>{html.escape(price)}</span></div>
             <div class="studio-brief-row"><span>톤</span><span>{html.escape(str(st.session_state.ad_tone))}</span></div>
           </div>
         </section>
-        <div class="studio-pipeline">{''.join(stage_cards)}</div>
         """,
         unsafe_allow_html=True,
     )
