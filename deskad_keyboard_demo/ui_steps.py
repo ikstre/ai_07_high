@@ -1,10 +1,12 @@
-"""Step-specific Streamlit input panels for DeskAd AI Studio."""
+"""DeskAd AI Studio의 단계별 Streamlit 입력 패널을 렌더링한다."""
 from __future__ import annotations
 
 import os
 from typing import Any
 
 import streamlit as st
+
+from ui.state import PRODUCT_FIELD_ERROR_KEY, missing_product_fields
 
 
 PRODUCT_TYPE_OPTIONS = ["커스텀 키보드", "키캡", "데스크매트", "데스크 조명", "모니터암", "데스크 소품", "번들 셋업"]
@@ -14,22 +16,21 @@ DRAWING_UPLOAD_OPTIONS = ["샘플 JSON 사용", "STEP/GLB 파일 업로드"]
 THEME_OPTIONS = ["minimal", "pastel", "premium", "gaming"]
 AD_TONE_OPTIONS = ["프리미엄형", "감성형", "할인형", "기능강조형"]
 IMAGE_RATIO_OPTIONS = ["1:1", "4:5", "16:9"]
-# 3개 평가 트랙(생성 엔진). 문구(텍스트)와 실사 이미지 backend가 함께 바뀐다.
 ENGINE_OPTIONS = ["hyperclova", "openai", "local"]
 ENGINE_LABELS = {
-    "hyperclova": "HyperCLOVA · 한국어 특화 (이미지: ComfyUI FLUX)",
-    "openai": "OpenAI · GPT-5.4 (이미지: GPT-Image)",
-    "local": "로컬 모델 + ComfyUI · 오프라인",
+    "hyperclova": "HyperCLOVA · 한국어 특화",
+    "openai": "OpenAI · 고품질 생성",
+    "local": "로컬 모델 · 내부 실행",
 }
 ENGINE_TIER_OPTIONS = ["general", "performance"]
 ENGINE_TIER_LABELS = {
-    "general": "일반 (GPT-5.4 Mini · GPT-image-1-mini)",
-    "performance": "고성능 (GPT-5.4 · GPT-Image-2)",
+    "general": "일반",
+    "performance": "고성능",
 }
 IMAGE_RATIO_LABELS = {
-    "1:1": "1:1 정사각 (인스타 피드·썸네일)",
-    "4:5": "4:5 세로 (인스타·상세 상단)",
-    "16:9": "16:9 가로 (배너·유튜브)",
+    "1:1": "1:1 정사각",
+    "4:5": "4:5 세로",
+    "16:9": "16:9 가로",
 }
 FIXED_SETUP_ITEMS = ["keyboard", "desk"]
 SETUP_ITEM_LABELS = {
@@ -65,6 +66,36 @@ def _option_index(options: list[str], value: str, default: int = 0) -> int:
     return options.index(value) if value in options else default
 
 
+def _render_button_choice(label: str, options: list[str], state_key: str, columns: int = 3) -> None:
+    st.caption(label)
+    cols = st.columns(columns)
+    current = st.session_state.get(state_key, options[0])
+    for index, option in enumerate(options):
+        button_type = "primary" if option == current else "secondary"
+        with cols[index % columns]:
+            if st.button(option, type=button_type, use_container_width=True, key=f"{state_key}_{option}"):
+                st.session_state[state_key] = option
+                st.rerun()
+
+
+def _render_poster_template_cards(ctx: dict[str, Any]) -> None:
+    st.caption("포스터 템플릿")
+    labels = ctx["POSTER_TEMPLATE_LABELS"]
+    thumbnails = ctx["POSTER_TEMPLATE_THUMBNAILS"]
+    cols = st.columns(2)
+    for index, (key, label) in enumerate(labels.items()):
+        selected = key == st.session_state.poster_template
+        with cols[index % 2]:
+            with st.container(border=True):
+                button_type = "primary" if selected else "secondary"
+                if st.button(label, type=button_type, use_container_width=True, key=f"poster_template_{key}"):
+                    st.session_state.poster_template = key
+                    st.rerun()
+                thumb = thumbnails.get(key)
+                if thumb:
+                    st.markdown(thumb, unsafe_allow_html=True)
+
+
 def _asset_enabled(asset_id: str) -> bool:
     return asset_id in set(st.session_state.asset_selection)
 
@@ -92,21 +123,27 @@ def render_step_input_panel(ctx: dict[str, Any]) -> None:
 
 def _render_product_info_step() -> None:
     st.markdown("#### 상품 정보")
+    if st.session_state.get(PRODUCT_FIELD_ERROR_KEY):
+        st.error(st.session_state[PRODUCT_FIELD_ERROR_KEY])
     st.session_state.product_type = st.selectbox(
         "상품 유형",
         PRODUCT_TYPE_OPTIONS,
         index=_option_index(PRODUCT_TYPE_OPTIONS, st.session_state.product_type),
     )
-    st.session_state.product_name = st.text_input("상품명", st.session_state.product_name)
-    st.session_state.price = st.text_input("판매가", st.session_state.price)
+    st.session_state.product_name = st.text_input("상품명", st.session_state.product_name, placeholder="예: 커스텀 키보드")
+    st.session_state.price = st.text_input("판매가", st.session_state.price, placeholder="예: 189,000원")
     st.session_state.target_channel = st.selectbox(
         "판매 채널",
         TARGET_CHANNEL_OPTIONS,
         index=_option_index(TARGET_CHANNEL_OPTIONS, st.session_state.target_channel),
     )
-    st.session_state.target_customer = st.text_input("타깃 고객", st.session_state.target_customer)
-    st.session_state.selling_point = st.text_area("핵심 특징", st.session_state.selling_point, height=95)
-
+    st.session_state.target_customer = st.text_input("타깃 고객", st.session_state.target_customer, placeholder="예: 깔끔한 데스크 셋업을 원하는 직장인")
+    st.session_state.selling_point = st.text_area("핵심 특징", st.session_state.selling_point, height=95, placeholder="예: 조용한 타건감, 크림 톤 키캡, 작은 책상에도 잘 맞는 65% 배열")
+    missing = missing_product_fields()
+    if missing:
+        st.caption(f"필수 입력값: {', '.join(missing)}")
+    else:
+        st.session_state.pop(PRODUCT_FIELD_ERROR_KEY, None)
 
 def _render_drawing_data_step(ctx: dict[str, Any]) -> None:
     st.markdown("#### 도면/제품 데이터")
@@ -155,14 +192,11 @@ def _render_drawing_data_step(ctx: dict[str, Any]) -> None:
 
 
 def _render_drawing_references(ctx: dict[str, Any]) -> None:
-    st.markdown("##### 도면/레퍼런스 라이브러리")
-    st.caption(
-        "여기서 고른 레퍼런스 이미지는 4단계 **실사 이미지 생성의 구조 기준(img2img)**으로 쓰입니다. "
-        "선택한 도면의 구도·비율을 따라 광고 컷이 생성됩니다. (전체 공용 · 노션 리서치 기반)"
-    )
+    st.markdown("##### 공용 도면/레퍼런스 라이브러리")
     references = ctx["fetch_reference_assets"]()
     # 노션에 올라온 도면/레퍼런스는 모두 공용으로 사용한다(shared/data 에서 서빙).
     shared_refs = [item for item in references if item.get("downloaded")]
+    st.caption(f"공용 도면/레퍼런스 {len(shared_refs)}개 (노션 리서치 기반, 전체 공용 사용)")
     if shared_refs:
         ref_options = {item["path"]: item for item in shared_refs if item.get("path")}
         if st.session_state.selected_reference_path not in ref_options:
@@ -305,10 +339,21 @@ def _render_virtual_setup_step(ctx: dict[str, Any]) -> None:
     )
 
     if st.button("3D 데스크 셋업 생성", type="primary", use_container_width=True):
+        progress = st.progress(0, text="3D 셋업 생성 준비 중")
+        status = st.empty()
         try:
+            status.info("25% · 셋업 옵션과 배치 구성을 정리하는 중")
+            progress.progress(25, text="셋업 옵션 정리 중")
+            status.info("60% · GLB 모델과 이미지 구도 데이터를 생성하는 중")
+            progress.progress(60, text="GLB 모델 생성 중")
             ctx["render_desk_setup"]()
+            status.success("100% · 3D GLB 생성 완료")
+            progress.progress(100, text="3D GLB 생성 완료")
             st.success("3D GLB 생성 완료")
+            st.rerun()
         except Exception as exc:
+            progress.empty()
+            status.empty()
             st.error(f"렌더링 실패: {exc}")
 
     # 새로 생성하는 대신 이전 생성 결과나 공용/외부 모델을 불러올 수 있게 한다.
@@ -357,46 +402,47 @@ def _render_keyboard_setup_controls(ctx: dict[str, Any]) -> None:
         st.session_state.keycap_color = st.color_picker("키캡", st.session_state.keycap_color)
     with color_c:
         st.session_state.accent_keycap_color = st.color_picker("포인트 키", st.session_state.accent_keycap_color)
-    detail_a, detail_b = st.columns(2)
-    with detail_a:
-        st.session_state.case_finish = st.selectbox(
-            "케이스 마감",
-            list(ctx["CASE_FINISH_LABELS"].keys()),
-            index=list(ctx["CASE_FINISH_LABELS"].keys()).index(st.session_state.case_finish),
-            format_func=lambda k: ctx["CASE_FINISH_LABELS"][k],
-        )
-        st.session_state.switch_family = st.selectbox(
-            "스위치 구조",
-            list(ctx["SWITCH_FAMILY_LABELS"].keys()),
-            index=list(ctx["SWITCH_FAMILY_LABELS"].keys()).index(st.session_state.switch_family),
-            format_func=lambda k: ctx["SWITCH_FAMILY_LABELS"][k],
-        )
-        st.session_state.keycap_profile = st.selectbox(
-            "키캡 프로파일",
-            list(ctx["KEYCAP_PROFILE_LABELS"].keys()),
-            index=list(ctx["KEYCAP_PROFILE_LABELS"].keys()).index(st.session_state.keycap_profile),
-            format_func=lambda k: ctx["KEYCAP_PROFILE_LABELS"][k],
-        )
-    with detail_b:
-        st.session_state.plate_material = st.selectbox(
-            "보강판 재질",
-            list(ctx["PLATE_MATERIAL_LABELS"].keys()),
-            index=list(ctx["PLATE_MATERIAL_LABELS"].keys()).index(st.session_state.plate_material),
-            format_func=lambda k: ctx["PLATE_MATERIAL_LABELS"][k],
-        )
-        st.session_state.switch_stem = st.selectbox(
-            "스위치 stem",
-            list(ctx["SWITCH_STEM_LABELS"].keys()),
-            index=list(ctx["SWITCH_STEM_LABELS"].keys()).index(st.session_state.switch_stem),
-            format_func=lambda k: ctx["SWITCH_STEM_LABELS"][k],
-        )
-        st.session_state.mount_type = st.selectbox(
-            "마운트 방식",
-            list(ctx["MOUNT_TYPE_LABELS"].keys()),
-            index=list(ctx["MOUNT_TYPE_LABELS"].keys()).index(st.session_state.mount_type),
-            format_func=lambda k: ctx["MOUNT_TYPE_LABELS"][k],
-        )
-    st.session_state.show_internals = st.checkbox("내부 구조 렌더 노출", value=st.session_state.show_internals)
+    with st.expander("고급 키보드 옵션", expanded=False):
+        detail_a, detail_b = st.columns(2)
+        with detail_a:
+            st.session_state.case_finish = st.selectbox(
+                "케이스 마감",
+                list(ctx["CASE_FINISH_LABELS"].keys()),
+                index=list(ctx["CASE_FINISH_LABELS"].keys()).index(st.session_state.case_finish),
+                format_func=lambda k: ctx["CASE_FINISH_LABELS"][k],
+            )
+            st.session_state.switch_family = st.selectbox(
+                "스위치 구조",
+                list(ctx["SWITCH_FAMILY_LABELS"].keys()),
+                index=list(ctx["SWITCH_FAMILY_LABELS"].keys()).index(st.session_state.switch_family),
+                format_func=lambda k: ctx["SWITCH_FAMILY_LABELS"][k],
+            )
+            st.session_state.keycap_profile = st.selectbox(
+                "키캡 프로파일",
+                list(ctx["KEYCAP_PROFILE_LABELS"].keys()),
+                index=list(ctx["KEYCAP_PROFILE_LABELS"].keys()).index(st.session_state.keycap_profile),
+                format_func=lambda k: ctx["KEYCAP_PROFILE_LABELS"][k],
+            )
+        with detail_b:
+            st.session_state.plate_material = st.selectbox(
+                "보강판 재질",
+                list(ctx["PLATE_MATERIAL_LABELS"].keys()),
+                index=list(ctx["PLATE_MATERIAL_LABELS"].keys()).index(st.session_state.plate_material),
+                format_func=lambda k: ctx["PLATE_MATERIAL_LABELS"][k],
+            )
+            st.session_state.switch_stem = st.selectbox(
+                "스위치 stem",
+                list(ctx["SWITCH_STEM_LABELS"].keys()),
+                index=list(ctx["SWITCH_STEM_LABELS"].keys()).index(st.session_state.switch_stem),
+                format_func=lambda k: ctx["SWITCH_STEM_LABELS"][k],
+            )
+            st.session_state.mount_type = st.selectbox(
+                "마운트 방식",
+                list(ctx["MOUNT_TYPE_LABELS"].keys()),
+                index=list(ctx["MOUNT_TYPE_LABELS"].keys()).index(st.session_state.mount_type),
+                format_func=lambda k: ctx["MOUNT_TYPE_LABELS"][k],
+            )
+        st.session_state.show_internals = st.checkbox("내부 구조 렌더 노출", value=st.session_state.show_internals)
 
 
 def _render_desk_setup_controls() -> None:
@@ -474,54 +520,36 @@ def _render_ad_content_step(ctx: dict[str, Any]) -> None:
         "생성 엔진",
         ENGINE_OPTIONS,
         index=_option_index(ENGINE_OPTIONS, st.session_state.get("engine", "hyperclova")),
-        format_func=lambda k: ENGINE_LABELS.get(k, k),
-        help="문구와 실사 이미지를 만드는 모델 묶음입니다. 같은 입력으로 엔진만 바꿔 결과를 비교해 보세요.",
+        format_func=lambda key: ENGINE_LABELS.get(key, key),
+        help="광고 문구와 실사 이미지 생성에 사용할 엔진 묶음입니다.",
     )
     if st.session_state.engine == "openai":
         st.session_state.engine_model_tier = st.radio(
             "OpenAI 모델 등급",
             ENGINE_TIER_OPTIONS,
             index=_option_index(ENGINE_TIER_OPTIONS, st.session_state.get("engine_model_tier", "general")),
-            format_func=lambda k: ENGINE_TIER_LABELS.get(k, k),
+            format_func=lambda key: ENGINE_TIER_LABELS.get(key, key),
             horizontal=True,
         )
 
-    ad_a, ad_b = st.columns(2)
+    ad_a, ad_b = st.columns([0.30, 0.70])
     with ad_a:
-        st.session_state.ad_tone = st.selectbox(
-            "광고 톤",
-            AD_TONE_OPTIONS,
-            index=_option_index(AD_TONE_OPTIONS, st.session_state.ad_tone),
-        )
-        st.session_state.image_ratio = st.selectbox(
-            "이미지 비율",
-            IMAGE_RATIO_OPTIONS,
-            index=_option_index(IMAGE_RATIO_OPTIONS, st.session_state.image_ratio),
-            format_func=lambda k: IMAGE_RATIO_LABELS.get(k, k),
-        )
+        _render_button_choice("광고 톤", AD_TONE_OPTIONS, "ad_tone", columns=2)
+        _render_button_choice("이미지 비율", IMAGE_RATIO_OPTIONS, "image_ratio", columns=3)
     with ad_b:
-        poster_template_labels = ctx["POSTER_TEMPLATE_LABELS"]
-        st.session_state.poster_template = st.selectbox(
-            "포스터 템플릿",
-            options=list(poster_template_labels.keys()),
-            index=list(poster_template_labels.keys()).index(st.session_state.poster_template),
-            format_func=lambda k: poster_template_labels[k],
-        )
-        ctx["render_poster_template_thumbnails"](st.session_state.poster_template)
+        _render_poster_template_cards(ctx)
         if _operator_mode():
             _render_ai_status(ctx["fetch_security_config"]())
     st.session_state.extra_request = st.text_area("추가 요청", st.session_state.extra_request, height=110)
 
-    # 셋업 구도 맵: 3D로 만든 데스크 셋업의 실제 배치를 img2img 기준으로 넣어 최종
-    # 이미지 구도(마우스 1개·구성품 위치)에 반영한다. 셋업을 렌더한 경우에만 노출.
     if st.session_state.get("setup_composition_b64"):
         st.session_state.use_setup_composition = st.checkbox(
-            "셋업 구도를 이미지 기준으로 사용",
+            "3D 셋업 구도를 이미지 기준으로 사용",
             value=st.session_state.get("use_setup_composition", True),
-            help="3D 데스크 셋업의 실제 배치(마우스 1개·구성품 위치)를 img2img 구조 기준으로 주입합니다. 선택 도면보다 우선합니다.",
+            help="Step 3에서 만든 데스크 셋업 구도를 실사 이미지 생성의 구도 기준으로 전달합니다.",
         )
         if st.session_state.use_setup_composition:
-            with st.expander("셋업 구도 맵 미리보기", expanded=False):
+            with st.expander("셋업 구도 미리보기", expanded=False):
                 import base64 as _b64
 
                 st.image(
@@ -532,23 +560,44 @@ def _render_ad_content_step(ctx: dict[str, Any]) -> None:
 
     col_copy, col_image, col_poster = st.columns(3)
     if col_copy.button("광고 문구 생성", type="secondary", use_container_width=True):
+        progress = st.progress(0, text="광고 문구 생성 준비 중")
         try:
+            progress.progress(30, text="엔진별 문구 후보 생성 중")
             ctx["generate_copy_experiment"]()
+            progress.progress(100, text="광고 문구 생성 완료")
             st.success("광고 문구 후보 생성 완료")
+            st.rerun()
         except Exception as exc:
+            progress.empty()
             st.error(f"문구 생성 실패: {exc}")
     if col_image.button("실사 이미지 작업", type="secondary", use_container_width=True):
+        progress = st.progress(0, text="이미지 작업 요청 준비 중")
         try:
+            progress.progress(35, text="이미지 생성 작업 등록 중")
             ctx["generate_image_job"]()
+            progress.progress(100, text="이미지 작업 등록 완료")
             st.success("이미지 작업 생성 완료")
+            st.rerun()
         except Exception as exc:
+            progress.empty()
             st.error(f"이미지 작업 실패: {exc}")
     poster_disabled = ctx["poster_waiting_for_image"]()
     if col_poster.button("포스터 생성", type="primary", use_container_width=True, disabled=poster_disabled):
+        progress = st.progress(0, text="포스터 생성 준비 중")
+        status = st.empty()
         try:
+            status.info("15% · 선택한 템플릿과 문구를 정리하는 중")
+            progress.progress(15, text="선택한 템플릿과 문구 정리 중")
+            status.info("45% · 광고 이미지와 SVG 포스터를 생성하는 중")
+            progress.progress(45, text="광고 이미지와 SVG 포스터 생성 중")
             ctx["generate_poster"]()
+            status.success("100% · 포스터 생성 완료")
+            progress.progress(100, text="포스터 생성 완료")
             st.success("포스터 생성 완료")
+            st.rerun()
         except Exception as exc:
+            progress.empty()
+            status.empty()
             st.error(f"포스터 생성 실패: {exc}")
     if poster_disabled:
         st.caption("이미지 작업이 완료되면 포스터 생성이 활성화됩니다.")

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ui.components import render_campaign_studio_header, render_step_progress
+from ui.components import render_campaign_studio_header
 from ui.context import build_step_ui_context
 from ui.result_panel import render_result_panel
 from ui.rendering import render_desk_setup
@@ -41,7 +41,6 @@ def go_previous() -> None:
 
 render_sidebar(sync_step_from_sidebar)
 render_ui_theme_styles(st.session_state.get("ui_theme_mode"))
-render_step_progress()
 render_campaign_studio_header()
 
 render_result_panel(build_step_ui_context(sync_layout_from_model), go_previous, go_next)

@@ -373,6 +373,76 @@ def render_base_layout_styles() -> None:
               linear-gradient(180deg, #ffffff, #e2e8f0);
             box-shadow: 0 18px 46px rgba(15, 23, 42, 0.16);
           }
+          .ad-preview-card .template-badge {
+            display: inline-flex;
+            margin-bottom: 14px;
+            padding: 5px 9px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.14);
+            color: rgba(255, 255, 255, 0.82);
+            font-size: 12px;
+            font-weight: 700;
+          }
+          .ad-preview-main {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 18px;
+          }
+          .ad-preview-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+          }
+          .ad-preview-grid span {
+            min-height: 58px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.22);
+          }
+          .ad-preview-spec {
+            padding: 14px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.14);
+          }
+          .ad-preview-spec strong {
+            display: block;
+            margin-bottom: 8px;
+            color: #bfdbfe;
+          }
+          .ad-preview-promo {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 16px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.18);
+            color: #ffffff;
+            font-weight: 800;
+          }
+          .ad-preview-promo strong {
+            font-size: 24px;
+          }
+          .ad-preview-card--grid_three .ad-preview-main,
+          .ad-preview-card--feature_focus .ad-preview-main,
+          .ad-preview-card--promo_banner .ad-preview-main {
+            grid-template-columns: minmax(0, 1fr) minmax(120px, 0.78fr);
+            align-items: start;
+          }
+          .ad-preview-card--grid_three {
+            background:
+              linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 64, 175, 0.74)),
+              linear-gradient(180deg, #ffffff, #dbeafe);
+          }
+          .ad-preview-card--feature_focus {
+            background:
+              linear-gradient(135deg, rgba(15, 23, 42, 0.88), rgba(4, 120, 87, 0.72)),
+              linear-gradient(180deg, #ffffff, #ccfbf1);
+          }
+          .ad-preview-card--promo_banner {
+            background:
+              linear-gradient(135deg, rgba(127, 29, 29, 0.88), rgba(245, 158, 11, 0.78)),
+              linear-gradient(180deg, #ffffff, #ffedd5);
+          }
           .ad-preview-card h3,
           .ad-preview-card .meta,
           .ad-preview-card li,
@@ -489,11 +559,21 @@ def render_ui_theme_styles(theme_mode: str | None) -> None:
             border-color: {tokens["border"]};
             background: {tokens["surface"]};
             color: {tokens["text"]};
+            border-radius: 8px !important;
+            min-width: 100%;
+          }}
+          .stButton > button p {{
+            white-space: normal !important;
+            word-break: keep-all !important;
+            overflow-wrap: normal !important;
+            line-height: 1.35 !important;
+            text-align: center;
           }}
           .stButton > button[kind="primary"] {{
             border-color: #ef4444;
             background: #ef4444;
             color: #ffffff;
+            border-radius: 8px !important;
           }}
           .section-label {{
             color: {tokens["subtle"]};

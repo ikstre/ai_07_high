@@ -1925,63 +1925,83 @@ def generate_openai_image_reference(payload: dict, image_prompt: str) -> dict | 
             "error": "OpenAI 이미지 생성에는 OPENAI_API_KEY가 필요합니다 (이미지 모델 미설정).",
             "has_image": False,
         }
-    request_payload: dict = {}
-    try:
-        width, height = _image_dimensions(payload)
-        size = f"{width}x{height}" if width == height else "1024x1024"
-        requested_count = _image_count_for_payload(payload)
-        request_payload = {
+
+    def request_openai_image(prompt: str, *, count: int) -> dict:
+        request_payload: dict = {
             "model": model,
-            "prompt": image_prompt,
+            "prompt": prompt,
             "size": size,
-            "n": requested_count,
+            "n": count,
             "response_format": "b64_json",
         }
-        result = _request_json(
-            f"{settings.openai_base_url.rstrip('/')}/images/generations",
-            headers={"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"},
-            payload=request_payload,
-            timeout=max(settings.request_timeout_seconds, 120),
-        )
-    except requests.HTTPError as exc:
-        response_text = getattr(exc.response, "text", "") if getattr(exc, "response", None) is not None else ""
-        if "response_format" not in response_text:
-            return {
-                "provider": "openai_image",
-                "model": model,
-                "error": f"{exc}: {response_text[:700]}" if response_text else str(exc),
-                "has_image": False,
-            }
         try:
-            request_payload.pop("response_format", None)
-            result = _request_json(
+            return _request_json(
                 f"{settings.openai_base_url.rstrip('/')}/images/generations",
                 headers={"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"},
                 payload=request_payload,
                 timeout=max(settings.request_timeout_seconds, 120),
             )
-        except Exception as retry_exc:
-            retry_response_text = (
-                getattr(retry_exc.response, "text", "")
-                if getattr(retry_exc, "response", None) is not None
-                else ""
+        except requests.HTTPError as exc:
+            response_text = getattr(exc.response, "text", "") if getattr(exc, "response", None) is not None else ""
+            if "response_format" not in response_text:
+                raise
+            request_payload.pop("response_format", None)
+            return _request_json(
+                f"{settings.openai_base_url.rstrip('/')}/images/generations",
+                headers={"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"},
+                payload=request_payload,
+                timeout=max(settings.request_timeout_seconds, 120),
             )
-            return {
-                "provider": "openai_image",
-                "model": model,
-                "error": f"{retry_exc}: {retry_response_text[:700]}" if retry_response_text else str(retry_exc),
-                "has_image": False,
-            }
-    except Exception as exc:
+
+    try:
+        width, height = _image_dimensions(payload)
+        size = f"{width}x{height}" if width == height else "1024x1024"
+        requested_count = _image_count_for_payload(payload)
+        if requested_count > 1 and payload.get("poster_template") == "grid_three":
+            image_b64s: list[str] = []
+            shot_results: list[dict] = []
+            for shot in _grid_three_shot_plan(payload):
+                shot_prompt = (
+                    f"{image_prompt}\n\n"
+                    f"[single shot variant] Create only this panel for the three-cut poster: "
+                    f"{shot['label']} / {shot['instruction']}. "
+                    "Do not reuse the same camera crop as the other panels; make this shot visually distinct."
+                )
+                shot_result = request_openai_image(shot_prompt, count=1)
+                shot_results.append(
+                    {
+                        "id": shot["id"],
+                        "label": shot["label"],
+                        "raw_keys": list(shot_result.keys()) if isinstance(shot_result, dict) else [],
+                    }
+                )
+                image_b64s.extend(_decode_local_images_to_b64(shot_result, limit=1))
+            result = {"grid_three_shot_results": shot_results}
+        else:
+            result = request_openai_image(image_prompt, count=requested_count)
+            image_b64s = _decode_local_images_to_b64(result, limit=requested_count)
+    except requests.HTTPError as exc:
+        response_text = getattr(exc.response, "text", "") if getattr(exc, "response", None) is not None else ""
         return {
             "provider": "openai_image",
             "model": model,
-            "error": str(exc),
+            "error": f"{exc}: {response_text[:700]}" if response_text else str(exc),
+            "has_image": False,
+        }
+    except Exception as exc:
+        retry_response_text = (
+            getattr(exc.response, "text", "")
+            if getattr(exc, "response", None) is not None
+            else ""
+        )
+        return {
+            "provider": "openai_image",
+            "model": model,
+            "error": f"{exc}: {retry_response_text[:700]}" if retry_response_text else str(exc),
             "has_image": False,
         }
 
     requested_count = _image_count_for_payload(payload)
-    image_b64s = _decode_local_images_to_b64(result, limit=requested_count)
     summary: dict = {
         "provider": "openai_image",
         "model": model,
@@ -1989,6 +2009,8 @@ def generate_openai_image_reference(payload: dict, image_prompt: str) -> dict | 
         "requested_image_count": requested_count,
         "image_count": len(image_b64s),
     }
+    if isinstance(result, dict) and result.get("grid_three_shot_results"):
+        summary["shot_results"] = result["grid_three_shot_results"]
     if image_b64s:
         summary["image_b64"] = image_b64s[0]
         if len(image_b64s) > 1:
