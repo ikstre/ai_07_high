@@ -96,6 +96,10 @@ class Settings:
     # 1.0이면 도면을 무시(text-to-image와 동일), 0에 가까울수록 도면 원형을 강하게 유지.
     # 0.6~0.7이 "도면 구조는 따르되 광고 톤으로 재생성" 균형(schnell cfg=1 기준).
     comfyui_img2img_denoise: float = _float_env("COMFYUI_IMG2IMG_DENOISE", 0.65)
+    # 셋업 구도 맵(평면 색블록)은 라인아트 도면보다 디테일이 없어 낮은 denoise면 도식
+    # 그대로 남는다 → 사실감을 얻으려면 높은 denoise가 필요(라이브 검증: 0.90이 구도
+    # 유지+사진화 균형, schnell 4스텝). 도면 레퍼런스(0.65)와 분리해 회귀를 막는다.
+    comfyui_composition_denoise: float = _float_env("COMFYUI_COMPOSITION_DENOISE", 0.90)
     flux_model_variant: str = os.getenv("FLUX_MODEL_VARIANT", "")
     image_quantization: str = os.getenv("IMAGE_QUANTIZATION", "")
     enable_vae_tiling: bool = _bool_env("ENABLE_VAE_TILING", False)

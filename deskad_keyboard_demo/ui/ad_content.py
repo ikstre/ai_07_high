@@ -53,6 +53,14 @@ def build_ad_payload() -> dict:
         "engine": st.session_state.get("engine", "hyperclova"),
         "engine_model_tier": st.session_state.get("engine_model_tier", "general"),
     }
+    # 셋업 구도 맵을 img2img 기준으로 주입(reference_image_b64는 선택 도면보다 우선).
+    # 토글이 켜져 있고 셋업이 렌더된 경우에만 → 실제 배치 구도가 결과에 반영된다.
+    if st.session_state.get("use_setup_composition", True):
+        composition = st.session_state.get("setup_composition_b64")
+        if composition:
+            payload["reference_image_b64"] = composition
+            payload["reference_image_topdown_b64"] = st.session_state.get("setup_composition_topdown_b64")
+            payload["reference_is_composition"] = True
     selected_copy = selected_copy_payload(st.session_state.copy_result)
     if selected_copy:
         payload["selected_copy"] = selected_copy

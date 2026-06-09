@@ -124,6 +124,15 @@ _DEFAULT_SHOT_BY_CHANNEL = {
     "유튜브 쇼츠": "eye_level",
 }
 
+
+def _resolve_shot_type(payload: dict) -> str:
+    """입력 shot_type 우선, 없으면 채널 기본값(없으면 hero)으로 구도 종류를 정한다."""
+    shot_type = sanitize_user_text(payload.get("shot_type", ""), limit=20)
+    if shot_type in _COMPOSITION_TEMPLATES:
+        return shot_type
+    channel = sanitize_user_text(payload.get("target_channel", "인스타그램"), limit=30)
+    return _DEFAULT_SHOT_BY_CHANNEL.get(channel, "hero")
+
 # 색온도 (PART 7-M-4). 조명(_IMAGE_DIRECTION_BY_TONE)과 같은 소스(ad_tone)에서 파생해
 # "따뜻한 조명 + 차가운 색온도" 같은 모순을 원천 차단한다. 5500K가 광고용 기본값.
 _COLOR_TEMP_BY_TONE = {
@@ -1270,10 +1279,7 @@ def build_image_prompt(payload: dict, copy_result: dict) -> str:
     extra = sanitize_user_text(payload.get("extra_request", ""), limit=400)
 
     # 구도 선택: 입력 shot_type 우선, 없으면 채널 기본값 (PART 7-M-2/M-3)
-    channel = sanitize_user_text(payload.get("target_channel", "인스타그램"), limit=30)
-    shot_type = sanitize_user_text(payload.get("shot_type", ""), limit=20)
-    if shot_type not in _COMPOSITION_TEMPLATES:
-        shot_type = _DEFAULT_SHOT_BY_CHANNEL.get(channel, "hero")
+    shot_type = _resolve_shot_type(payload)
     comp = _COMPOSITION_TEMPLATES[shot_type]
 
     # 장면(scene)에 맞춰 [subject]·조명을 일관되게 구성 (구도-장면 모순 제거)
@@ -2143,7 +2149,7 @@ def _select_workflow_path(payload: dict) -> Path | None:
     return _resolve_workflow_path(settings.comfyui_workflow_path)
 
 
-def _workflow_placeholder_mapping(settings, image_prompt: str, width: int, height: int) -> dict:
+def _workflow_placeholder_mapping(settings, image_prompt: str, width: int, height: int, *, denoise: float | None = None) -> dict:
     """Build {key}/{{key}} → value map for workflow placeholder substitution."""
     seed = int(time.time() * 1000) % 2147483647
     values = {
@@ -2158,7 +2164,7 @@ def _workflow_placeholder_mapping(settings, image_prompt: str, width: int, heigh
         "lora_strength": settings.comfyui_lora_strength,
         "controlnet_image": settings.comfyui_controlnet_image,
         "controlnet_strength": settings.comfyui_controlnet_strength,
-        "denoise": settings.comfyui_img2img_denoise,
+        "denoise": settings.comfyui_img2img_denoise if denoise is None else denoise,
     }
     mapping: dict = {}
     for key, val in values.items():
@@ -2194,7 +2200,13 @@ def _upload_reference_to_comfyui(payload: dict, settings) -> str | None:
     ComfyUI LoadImage는 input 폴더의 파일명만 받으므로 b64를 직접 못 넣는다 → 먼저 업로드.
     레퍼런스가 없거나 업로드 실패면 None(호출부가 img2img 불가로 처리).
     """
-    b64 = _reference_image_b64(payload)
+    # 구도 맵 레퍼런스는 채널 앵글에 맞춰 투영 선택: top_down 채널이면 flat-lay 맵을,
+    # 그 외(hero/eye-level/wide)는 원근 맵을 쓴다 → img2img init과 프롬프트 앵글 일치.
+    b64 = None
+    if payload.get("reference_is_composition") and _resolve_shot_type(payload) == "top_down":
+        b64 = payload.get("reference_image_topdown_b64")
+    if not b64:
+        b64 = _reference_image_b64(payload)
     if not b64:
         return None
     try:
@@ -2229,7 +2241,10 @@ def _load_comfyui_workflow(payload: dict, image_prompt: str) -> dict | None:
     if not workflow_path or not workflow_path.exists():
         return None
     width, height = _image_dimensions(payload)
-    mapping = _workflow_placeholder_mapping(settings, image_prompt, width, height)
+    # 셋업 구도 맵(평면 색블록)은 라인아트 도면보다 높은 denoise라야 사실감이 생긴다.
+    # → 구도 맵 레퍼런스면 composition denoise, 그 외(도면)는 기존 img2img denoise.
+    denoise = settings.comfyui_composition_denoise if payload.get("reference_is_composition") else None
+    mapping = _workflow_placeholder_mapping(settings, image_prompt, width, height, denoise=denoise)
     workflow_text = workflow_path.read_text(encoding="utf-8")
     # img2img: 워크플로가 {reference_image_name}을 참조하면 선택 도면을 ComfyUI에
     # 업로드해 그 파일명으로 치환한다. 레퍼런스가 없거나 업로드 실패면 워크플로를

@@ -86,6 +86,10 @@ def render_desk_setup() -> None:
     data = api_post("/render/desk-setup", build_render_payload(), timeout=30)
     st.session_state.model_url = data["model_url"]
     st.session_state.model_meta = data
+    # 셋업 구도 맵: img2img가 실제 배치(마우스 1개·구성품 위치)를 따르도록 보관.
+    # 원근/탑다운 두 투영을 모두 저장 → 백엔드가 채널 앵글에 맞게 고른다.
+    st.session_state.setup_composition_b64 = data.get("composition_b64")
+    st.session_state.setup_composition_topdown_b64 = data.get("composition_topdown_b64")
 
 def upload_reference_model(uploaded_file) -> None:
     raw = uploaded_file.getvalue()

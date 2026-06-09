@@ -1895,10 +1895,33 @@ def build_desk_setup_scene_glb(
 
     monitor_dim = _MONITOR_SIZES_CM.get(monitor_size, _MONITOR_SIZES_CM["27"])
     placed_items = [box[4] for box in placer.boxes]
+    # 셋업 구도 맵: 실제 배치 좌표로 래스터를 그려 img2img 레퍼런스로 노출. 카메라 앵글이
+    # 채널마다 달라(인스타=flat-lay, 그 외=원근) 두 투영을 모두 만들어 백엔드가 고른다.
+    import base64 as _b64
+
+    _comp_kwargs = dict(
+        boxes=placer.boxes,
+        desk_width=desk_width,
+        desk_depth=desk_depth,
+        colors={"desk": desk_color, "deskmat": deskmat_color, "keyboard": case_color, "mouse": mouse_color},
+        theme=theme,
+        monitor=(
+            {"center_x": 0.0, "center_z": monitor_center_z, "panel_w": panel_w, "panel_h": panel_h}
+            if "monitor" in enabled_assets
+            else None
+        ),
+        deskmat={"center_z": deskmat_z, "width": deskmat_w, "depth": deskmat_d},
+    )
+    raster = build_setup_composition_raster(projection="perspective", **_comp_kwargs)
+    raster_td = build_setup_composition_raster(projection="top_down", **_comp_kwargs)
+    composition_b64 = _b64.b64encode(raster).decode("ascii") if raster else None
+    composition_topdown_b64 = _b64.b64encode(raster_td).decode("ascii") if raster_td else None
     return {
         **keyboard_meta,
         "desk_width": desk_width,
         "desk_depth": desk_depth,
+        "composition_b64": composition_b64,
+        "composition_topdown_b64": composition_topdown_b64,
         "monitor_size_inch": monitor_size,
         "monitor_panel_cm": f"{monitor_dim[0]} x {monitor_dim[1]}",
         "dimension_unit": "cm",
@@ -1913,6 +1936,237 @@ def build_desk_setup_scene_glb(
         "asset_count": len(enabled_assets),
         "model_file": output_path.name,
     }
+
+
+# ─── 셋업 구도 맵(composition raster) ───────────────────────────────────────
+# 생성한 데스크 셋업의 *실제 배치*를 의사 원근 2D 래스터로 그려 img2img의
+# reference_image_b64로 넣는다. GLB를 헤드리스 렌더하지 않고 DeskPlacer가 이미
+# 알고 있는 배치 좌표(cm)만으로 그리므로 무거운 GL 의존성이 없다(순수 PIL).
+# 목적: 마우스 1개·케이블 미연결·구성품 위치가 최종 이미지에 그대로 반영되도록
+# 구도 단서를 강제한다(handoff 그룹 1-1).
+
+# canon 라벨 → (높이_cm, 기본색 hex). 키보드/마우스 색은 호출부가 덮어쓴다.
+_COMP_OBJECTS: dict[str, tuple[float, str]] = {
+    "keyboard": (3.6, "#2b2f36"),
+    "mouse": (4.2, "#2b2f36"),
+    "plant": (26.0, "#4a6b4b"),
+    "desk_lamp": (44.0, "#30343b"),
+    "speaker": (22.0, "#30343b"),
+    "desk_shelf": (28.0, "#6b4f34"),
+    "notebook": (2.6, "#5a6068"),
+    "headphone_stand": (28.0, "#30343b"),
+    "phone_stand": (14.0, "#30343b"),
+    "keycap_tray": (4.0, "#30343b"),
+    "coffee_mug": (9.5, "#f5f1e8"),
+    "digital_clock": (7.0, "#30343b"),
+    "aroma_diffuser": (12.0, "#d6c8b9"),
+    "wireless_charger": (1.6, "#30343b"),
+    "pen_holder": (11.0, "#30343b"),
+    "book_stack": (9.0, "#2c3e50"),
+    "humidifier": (18.0, "#d6c8b9"),
+    "photo_frame": (14.0, "#30343b"),
+    "usb_hub": (3.0, "#30343b"),
+    "mouse_pad": (0.6, "#23262b"),
+}
+_COMP_DEFAULT: tuple[float, str] = (8.0, "#7a808a")
+
+
+def _comp_canon(label: str) -> str:
+    """DeskPlacer 라벨을 _COMP_OBJECTS 키로 정규화한다."""
+    c = label.strip().lower().replace(" ", "_")
+    if c.startswith("monitor"):
+        return "monitor"
+    if c.startswith("speaker"):
+        return "speaker"
+    if c == "mouse_pad_round":
+        return "mouse_pad"
+    return c
+
+
+def _hex_rgb(value: str) -> tuple[int, int, int]:
+    v = value.strip().lstrip("#")
+    if len(v) != 6:
+        v = "7a808a"
+    return (int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16))
+
+
+def _shade(rgb: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
+    return tuple(max(0, min(255, int(c * factor))) for c in rgb)  # type: ignore[return-value]
+
+
+def build_setup_composition_raster(
+    *,
+    boxes: list[tuple[float, float, float, float, str]],
+    desk_width: float,
+    desk_depth: float,
+    colors: dict[str, str],
+    theme: str = "minimal",
+    monitor: dict | None = None,
+    deskmat: dict | None = None,
+    size: int = 1024,
+    projection: str = "perspective",
+) -> bytes | None:
+    """배치 좌표만으로 구도 맵 PNG 바이트를 만든다(순수 PIL, ~25ms).
+
+    ``projection``: ``"perspective"``(hero/eye-level/wide 채널용 의사 원근) 또는
+    ``"top_down"``(인스타그램 등 flat-lay 채널용 오버헤드 평면도). 카메라 앵글이
+    채널마다 달라 img2img init과 프롬프트 앵글을 맞추려고 두 투영을 모두 그린다.
+    실패하면 None(호출부가 구도 맵 없이 진행). ``boxes``는
+    ``(x_min, z_min, x_max, z_max, label)`` cm 좌표(z_min=뒤쪽).
+    """
+    try:
+        import io
+
+        from PIL import Image, ImageDraw
+    except Exception:
+        return None
+    try:
+        S = max(256, int(size))
+        dw, dd = max(1.0, desk_width), max(1.0, desk_depth)
+        screen_rgb = _hex_rgb("#2845ff" if theme == "gaming" else "#3a4a72")
+
+        if projection == "top_down":
+            return _composition_top_down(
+                Image, ImageDraw, S, dw, dd, boxes, colors, screen_rgb, monitor, deskmat
+            )
+
+        cx = S / 2.0
+        y_back, y_front = 0.34 * S, 0.93 * S
+        hw_back, hw_front = 0.24 * S, 0.47 * S
+        px = S / 1024.0
+        v_back, v_front = 2.9 * px, 4.4 * px  # cm당 화면 픽셀(앞이 더 큼)
+
+        def project(x: float, z: float, h: float) -> tuple[float, float]:
+            t = (z + dd / 2) / dd
+            t = max(-0.15, min(1.15, t))
+            row_y = y_back + t * (y_front - y_back)
+            hw = hw_back + t * (hw_front - hw_back)
+            col_x = cx + (x / (dw / 2)) * hw
+            v = v_back + t * (v_front - v_back)
+            return (col_x, row_y - h * v)
+
+        # 배경: 위(벽)→아래(바닥) 부드러운 명도 그라데이션.
+        img = Image.new("RGB", (S, S), (236, 231, 223))
+        dr = ImageDraw.Draw(img)
+        for yy in range(S):
+            f = yy / S
+            tone = int(214 + 26 * f)
+            dr.line([(0, yy), (S, yy)], fill=(tone, tone - 4, tone - 11))
+
+        def quad(pts: list[tuple[float, float]], fill, outline=None, width=1) -> None:
+            dr.polygon(pts, fill=fill, outline=outline, width=width)
+
+        # 책상 상판(사다리꼴) + 앞 모서리 띠.
+        desk_rgb = _hex_rgb(colors.get("desk", "#6b4f34"))
+        bl = project(-dw / 2, -dd / 2, 0)
+        br = project(dw / 2, -dd / 2, 0)
+        fr = project(dw / 2, dd / 2, 0)
+        fl = project(-dw / 2, dd / 2, 0)
+        quad([bl, br, fr, fl], _shade(desk_rgb, 0.92), outline=_shade(desk_rgb, 0.7), width=2)
+        quad([fl, fr, (fr[0], fr[1] + 10), (fl[0], fl[1] + 10)], _shade(desk_rgb, 0.7))
+
+        # 데스크매트(있으면).
+        if deskmat:
+            mz, mw, md = deskmat["center_z"], deskmat["width"], deskmat["depth"]
+            mrgb = _hex_rgb(colors.get("deskmat", "#23262b"))
+            mpts = [
+                project(-mw / 2, mz - md / 2, 0),
+                project(mw / 2, mz - md / 2, 0),
+                project(mw / 2, mz + md / 2, 0),
+                project(-mw / 2, mz + md / 2, 0),
+            ]
+            quad(mpts, _shade(mrgb, 0.96), outline=_shade(mrgb, 0.75), width=1)
+
+        def draw_box(
+            x0: float, z0: float, x1: float, z1: float, y0: float, y1: float,
+            base: tuple[int, int, int], front_rgb: tuple[int, int, int] | None = None,
+        ) -> None:
+            # 8 꼭짓점(앞=z1, 뒤=z0)
+            fbl, fbr = project(x0, z1, y0), project(x1, z1, y0)
+            ftl, ftr = project(x0, z1, y1), project(x1, z1, y1)
+            bbl, bbr = project(x0, z0, y0), project(x1, z0, y0)
+            btl, btr = project(x0, z0, y1), project(x1, z0, y1)
+            edge = _shade(base, 0.5)
+            quad([bbl, fbl, ftl, btl], _shade(base, 0.64), outline=edge)  # 좌측면
+            quad([bbr, fbr, ftr, btr], _shade(base, 0.74), outline=edge)  # 우측면
+            quad([fbl, fbr, ftr, ftl], front_rgb or _shade(base, 0.84), outline=edge)  # 앞면
+            quad([btl, btr, ftr, ftl], _shade(base, 1.06), outline=edge)  # 윗면
+
+        # 객체를 뒤→앞(painter's) 순으로. 모니터는 별도(키 큰 화면)로 처리.
+        items = [b for b in boxes if not _comp_canon(b[4]) == "monitor"]
+        items.sort(key=lambda b: (b[1] + b[3]) / 2)
+        for x0, z0, x1, z1, label in items:
+            canon = _comp_canon(label)
+            height, base_hex = _COMP_OBJECTS.get(canon, _COMP_DEFAULT)
+            override = colors.get(canon)
+            base_rgb = _hex_rgb(override) if override else _hex_rgb(base_hex)
+            draw_box(x0, z0, x1, z1, 0.0, height, base_rgb)
+
+        # 모니터: 스탠드 + 키 큰 화면(앞면 글로우)으로 뒤쪽에 세운다.
+        if monitor:
+            mcx = monitor["center_x"]
+            mcz = monitor["center_z"]
+            pw, ph = monitor["panel_w"], monitor["panel_h"]
+            neutral = _hex_rgb("#22252b")
+            draw_box(mcx - 4, mcz - 1.5, mcx + 4, mcz + 1.5, 0.0, 11.0, neutral)  # 스탠드
+            draw_box(mcx - pw / 2, mcz - 2.0, mcx + pw / 2, mcz + 2.0, 11.0, 11.0 + ph, neutral, front_rgb=screen_rgb)
+
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        return None
+
+
+def _composition_top_down(
+    Image, ImageDraw, S, dw, dd, boxes, colors, screen_rgb, monitor, deskmat
+) -> bytes:
+    """오버헤드 평면도(flat-lay) 구도 맵. 책상 종횡비를 보존해 footprint를 그린다."""
+    import io
+
+    img = Image.new("RGB", (S, S), (238, 234, 227))
+    dr = ImageDraw.Draw(img)
+    margin = 0.05 * S
+    avail = S - 2 * margin
+    if dw >= dd:
+        desk_w_px, desk_h_px = avail, avail * (dd / dw)
+    else:
+        desk_h_px, desk_w_px = avail, avail * (dw / dd)
+    x_off = (S - desk_w_px) / 2
+    y_off = (S - desk_h_px) / 2
+
+    def td(x: float, z: float) -> tuple[float, float]:
+        return (x_off + (x + dw / 2) / dw * desk_w_px, y_off + (z + dd / 2) / dd * desk_h_px)
+
+    def rect(x0: float, z0: float, x1: float, z1: float, fill, outline=None, width=1) -> None:
+        p0, p1 = td(x0, z0), td(x1, z1)
+        dr.rectangle([p0[0], p0[1], p1[0], p1[1]], fill=fill, outline=outline, width=width)
+
+    desk_rgb = _hex_rgb(colors.get("desk", "#6b4f34"))
+    rect(-dw / 2, -dd / 2, dw / 2, dd / 2, _shade(desk_rgb, 0.95), _shade(desk_rgb, 0.68), 3)
+    if deskmat:
+        mz, mw, md = deskmat["center_z"], deskmat["width"], deskmat["depth"]
+        mrgb = _hex_rgb(colors.get("deskmat", "#23262b"))
+        rect(-mw / 2, mz - md / 2, mw / 2, mz + md / 2, _shade(mrgb, 0.96), _shade(mrgb, 0.78), 2)
+
+    for x0, z0, x1, z1, label in boxes:
+        canon = _comp_canon(label)
+        if canon == "monitor":
+            continue
+        _, base_hex = _COMP_OBJECTS.get(canon, _COMP_DEFAULT)
+        override = colors.get(canon)
+        rgb = _hex_rgb(override) if override else _hex_rgb(base_hex)
+        rect(x0, z0, x1, z1, rgb, _shade(rgb, 0.55), 2)
+
+    if monitor:
+        mcx, mcz, pw = monitor["center_x"], monitor["center_z"], monitor["panel_w"]
+        # 오버헤드에서 모니터는 뒤쪽 가장자리의 얇은 바 + 화면 글로우 띠로 읽힌다.
+        rect(mcx - pw / 2, mcz - 3.0, mcx + pw / 2, mcz + 3.0, _hex_rgb("#22252b"), _hex_rgb("#15171c"), 2)
+        rect(mcx - pw / 2, mcz + 0.5, mcx + pw / 2, mcz + 3.0, screen_rgb)
+
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
 
 
 def build_uploaded_step_proxy_glb(

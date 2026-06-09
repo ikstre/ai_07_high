@@ -512,6 +512,24 @@ def _render_ad_content_step(ctx: dict[str, Any]) -> None:
             _render_ai_status(ctx["fetch_security_config"]())
     st.session_state.extra_request = st.text_area("추가 요청", st.session_state.extra_request, height=110)
 
+    # 셋업 구도 맵: 3D로 만든 데스크 셋업의 실제 배치를 img2img 기준으로 넣어 최종
+    # 이미지 구도(마우스 1개·구성품 위치)에 반영한다. 셋업을 렌더한 경우에만 노출.
+    if st.session_state.get("setup_composition_b64"):
+        st.session_state.use_setup_composition = st.checkbox(
+            "셋업 구도를 이미지 기준으로 사용",
+            value=st.session_state.get("use_setup_composition", True),
+            help="3D 데스크 셋업의 실제 배치(마우스 1개·구성품 위치)를 img2img 구조 기준으로 주입합니다. 선택 도면보다 우선합니다.",
+        )
+        if st.session_state.use_setup_composition:
+            with st.expander("셋업 구도 맵 미리보기", expanded=False):
+                import base64 as _b64
+
+                st.image(
+                    _b64.b64decode(st.session_state.setup_composition_b64),
+                    caption="img2img 구도 기준",
+                    use_container_width=True,
+                )
+
     col_copy, col_image, col_poster = st.columns(3)
     if col_copy.button("광고 문구 생성", type="secondary", use_container_width=True):
         try:
