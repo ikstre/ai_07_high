@@ -69,6 +69,11 @@ class AdContentRequest(DeskSetupRenderRequest):
     image_job_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
     image_workflow: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
     poster_template: str = Field(default="minimal_card", pattern=r"^(minimal_card|grid_three|feature_focus|promo_banner)$")
+    # 평가 트랙(생성 엔진): openai=OpenAI API, hyperclova=HyperCLOVA, local=로컬 텍스트+ComfyUI.
+    # auto는 서버 기본값(AI_PROVIDER/IMAGE_MODEL_BACKEND)을 따른다.
+    engine: str = Field(default="auto", pattern=r"^(auto|openai|hyperclova|local)$")
+    # OpenAI 엔진의 모델 등급(일반/고성능). 다른 엔진에서는 무시된다.
+    engine_model_tier: str = Field(default="general", pattern=r"^(general|performance)$")
     selected_copy: SelectedCopy | None = None
 
 
@@ -93,7 +98,7 @@ class LibraryModelRequest(BaseModel):
 class CopyExperimentRequest(AdContentRequest):
     """여러 provider로 광고 문구를 실험할 요청을 검증한다."""
 
-    providers: list[str] = Field(default_factory=lambda: ["hyperclova", "kanana", "midm", "local", "fallback"])
+    providers: list[str] = Field(default_factory=lambda: ["openai", "hyperclova", "local", "fallback"])
 
 
 class PlateDrawingRenderRequest(BaseModel):

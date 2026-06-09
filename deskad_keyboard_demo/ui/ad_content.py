@@ -7,7 +7,7 @@ import time
 
 import streamlit as st
 
-from .api_client import api_get, api_post, fetch_ai_providers
+from .api_client import api_get, api_post
 from .constants import IMAGE_JOB_TERMINAL_STATUSES, PROVIDER_LABELS
 from .rendering import build_render_payload
 
@@ -50,6 +50,8 @@ def build_ad_payload() -> dict:
         "image_job_id": current_image_job_id(),
         "image_workflow": st.session_state.image_workflow,
         "poster_template": st.session_state.poster_template,
+        "engine": st.session_state.get("engine", "hyperclova"),
+        "engine_model_tier": st.session_state.get("engine_model_tier", "general"),
     }
     selected_copy = selected_copy_payload(st.session_state.copy_result)
     if selected_copy:
@@ -128,14 +130,9 @@ def generate_copy() -> None:
     st.session_state.copy_selected_provider = st.session_state.copy_result.get("provider")
 
 def generate_copy_experiment() -> None:
-    providers = [
-        item.get("id")
-        for item in fetch_ai_providers().get("providers", [])
-        if item.get("configured") and item.get("id") and item.get("id") != "fallback"
-    ]
-    if "fallback" not in providers:
-        providers.append("fallback")
-    payload = {**build_ad_payload(), "providers": providers or ["fallback"]}
+    # 3개 평가 트랙(엔진)을 항상 같은 입력으로 나란히 비교한다. 미설정 엔진은
+    # not_configured로 표시돼 어떤 트랙이 활성인지 한눈에 보인다.
+    payload = {**build_ad_payload(), "providers": ["openai", "hyperclova", "local", "fallback"]}
     st.session_state.copy_experiment_result = api_post("/ai/copy/experiment", payload, timeout=300)
     st.session_state.copy_result = None
     st.session_state.copy_selected_provider = None
@@ -250,11 +247,16 @@ def render_copy_experiment_picker() -> None:
         if model_name:
             label += f" · {model_name}"
         status = item.get("status", "unknown")
+        elapsed_ms = item.get("elapsed_ms")
+        # 응답 속도는 평가 기준(응답 속도/부하)이므로 후보 카드에 함께 노출한다.
+        speed_note = ""
+        if isinstance(elapsed_ms, (int, float)) and status == "ok":
+            speed_note = " · 캐시" if item.get("cache_hit") else f" · {elapsed_ms/1000:.1f}s"
         copy = item.get("copy") or {}
         with st.container(border=True):
             head_col, action_col = st.columns([0.78, 0.22])
             with head_col:
-                st.caption(f"{label} · {status}")
+                st.caption(f"{label} · {status}{speed_note}")
                 if copy:
                     st.markdown(f"##### {copy.get('headline') or '제목 없음'}")
                     if copy.get("subcopy"):

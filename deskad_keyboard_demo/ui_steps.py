@@ -14,6 +14,23 @@ DRAWING_UPLOAD_OPTIONS = ["샘플 JSON 사용", "STEP/GLB 파일 업로드"]
 THEME_OPTIONS = ["minimal", "pastel", "premium", "gaming"]
 AD_TONE_OPTIONS = ["프리미엄형", "감성형", "할인형", "기능강조형"]
 IMAGE_RATIO_OPTIONS = ["1:1", "4:5", "16:9"]
+# 3개 평가 트랙(생성 엔진). 문구(텍스트)와 실사 이미지 backend가 함께 바뀐다.
+ENGINE_OPTIONS = ["hyperclova", "openai", "local"]
+ENGINE_LABELS = {
+    "hyperclova": "HyperCLOVA · 한국어 특화 (이미지: ComfyUI FLUX)",
+    "openai": "OpenAI · GPT-5.4 (이미지: GPT-Image)",
+    "local": "로컬 모델 + ComfyUI · 오프라인",
+}
+ENGINE_TIER_OPTIONS = ["general", "performance"]
+ENGINE_TIER_LABELS = {
+    "general": "일반 (GPT-5.4 Mini · GPT-image-1-mini)",
+    "performance": "고성능 (GPT-5.4 · GPT-Image-2)",
+}
+IMAGE_RATIO_LABELS = {
+    "1:1": "1:1 정사각 (인스타 피드·썸네일)",
+    "4:5": "4:5 세로 (인스타·상세 상단)",
+    "16:9": "16:9 가로 (배너·유튜브)",
+}
 FIXED_SETUP_ITEMS = ["keyboard", "desk"]
 SETUP_ITEM_LABELS = {
     "keyboard": "키보드",
@@ -138,11 +155,14 @@ def _render_drawing_data_step(ctx: dict[str, Any]) -> None:
 
 
 def _render_drawing_references(ctx: dict[str, Any]) -> None:
-    st.markdown("##### 공용 도면/레퍼런스 라이브러리")
+    st.markdown("##### 도면/레퍼런스 라이브러리")
+    st.caption(
+        "여기서 고른 레퍼런스 이미지는 4단계 **실사 이미지 생성의 구조 기준(img2img)**으로 쓰입니다. "
+        "선택한 도면의 구도·비율을 따라 광고 컷이 생성됩니다. (전체 공용 · 노션 리서치 기반)"
+    )
     references = ctx["fetch_reference_assets"]()
     # 노션에 올라온 도면/레퍼런스는 모두 공용으로 사용한다(shared/data 에서 서빙).
     shared_refs = [item for item in references if item.get("downloaded")]
-    st.caption(f"공용 도면/레퍼런스 {len(shared_refs)}개 (노션 리서치 기반, 전체 공용 사용)")
     if shared_refs:
         ref_options = {item["path"]: item for item in shared_refs if item.get("path")}
         if st.session_state.selected_reference_path not in ref_options:
@@ -449,6 +469,23 @@ def _render_generic_asset_controls(asset_id: str, ctx: dict[str, Any]) -> None:
 
 def _render_ad_content_step(ctx: dict[str, Any]) -> None:
     st.markdown("#### 광고 콘텐츠")
+
+    st.session_state.engine = st.selectbox(
+        "생성 엔진",
+        ENGINE_OPTIONS,
+        index=_option_index(ENGINE_OPTIONS, st.session_state.get("engine", "hyperclova")),
+        format_func=lambda k: ENGINE_LABELS.get(k, k),
+        help="문구와 실사 이미지를 만드는 모델 묶음입니다. 같은 입력으로 엔진만 바꿔 결과를 비교해 보세요.",
+    )
+    if st.session_state.engine == "openai":
+        st.session_state.engine_model_tier = st.radio(
+            "OpenAI 모델 등급",
+            ENGINE_TIER_OPTIONS,
+            index=_option_index(ENGINE_TIER_OPTIONS, st.session_state.get("engine_model_tier", "general")),
+            format_func=lambda k: ENGINE_TIER_LABELS.get(k, k),
+            horizontal=True,
+        )
+
     ad_a, ad_b = st.columns(2)
     with ad_a:
         st.session_state.ad_tone = st.selectbox(
@@ -460,6 +497,7 @@ def _render_ad_content_step(ctx: dict[str, Any]) -> None:
             "이미지 비율",
             IMAGE_RATIO_OPTIONS,
             index=_option_index(IMAGE_RATIO_OPTIONS, st.session_state.image_ratio),
+            format_func=lambda k: IMAGE_RATIO_LABELS.get(k, k),
         )
     with ad_b:
         poster_template_labels = ctx["POSTER_TEMPLATE_LABELS"]
