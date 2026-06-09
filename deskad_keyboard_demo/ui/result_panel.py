@@ -143,7 +143,15 @@ def render_result_panel(ctx: dict, go_previous, go_next) -> None:
                 job = image_job_result.get("job", {})
                 job_id = job.get("job_id")
                 with st.expander("실사 이미지 작업 상태", expanded=job.get("status") not in IMAGE_JOB_TERMINAL_STATUSES):
-                    st.caption(f"{job.get('provider', 'fallback')} · {job.get('status', 'unknown')} · {job.get('width', '')}×{job.get('height', '')}")
+                    started_at = job.get("created_at")
+                    finished_at = job.get("completed_at")
+                    elapsed_note = ""
+                    if isinstance(started_at, (int, float)) and isinstance(finished_at, (int, float)) and finished_at >= started_at:
+                        elapsed_note = f" · 생성 {int(finished_at - started_at)}초"
+                    st.caption(
+                        f"{job.get('provider', 'fallback')} · {job.get('status', 'unknown')} · "
+                        f"{job.get('width', '')}×{job.get('height', '')}{elapsed_note}"
+                    )
                     col_refresh, col_quality = st.columns(2)
                     if col_refresh.button("이미지 작업 상태 갱신", use_container_width=True):
                         try:
