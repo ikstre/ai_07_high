@@ -14,6 +14,22 @@ DRAWING_UPLOAD_OPTIONS = ["샘플 JSON 사용", "STEP/GLB 파일 업로드"]
 THEME_OPTIONS = ["minimal", "pastel", "premium", "gaming"]
 AD_TONE_OPTIONS = ["프리미엄형", "감성형", "할인형", "기능강조형"]
 IMAGE_RATIO_OPTIONS = ["1:1", "4:5", "16:9"]
+ENGINE_OPTIONS = ["hyperclova", "openai", "local"]
+ENGINE_LABELS = {
+    "hyperclova": "HyperCLOVA · 한국어 특화",
+    "openai": "OpenAI · 고품질 생성",
+    "local": "로컬 모델 · 내부 실행",
+}
+ENGINE_TIER_OPTIONS = ["general", "performance"]
+ENGINE_TIER_LABELS = {
+    "general": "일반",
+    "performance": "고성능",
+}
+IMAGE_RATIO_LABELS = {
+    "1:1": "1:1 정사각",
+    "4:5": "4:5 세로",
+    "16:9": "16:9 가로",
+}
 FIXED_SETUP_ITEMS = ["keyboard", "desk"]
 SETUP_ITEM_LABELS = {
     "keyboard": "키보드",
@@ -480,6 +496,23 @@ def _render_generic_asset_controls(asset_id: str, ctx: dict[str, Any]) -> None:
 
 def _render_ad_content_step(ctx: dict[str, Any]) -> None:
     st.markdown("#### 광고 콘텐츠")
+
+    st.session_state.engine = st.selectbox(
+        "생성 엔진",
+        ENGINE_OPTIONS,
+        index=_option_index(ENGINE_OPTIONS, st.session_state.get("engine", "hyperclova")),
+        format_func=lambda key: ENGINE_LABELS.get(key, key),
+        help="광고 문구와 실사 이미지 생성에 사용할 엔진 묶음입니다.",
+    )
+    if st.session_state.engine == "openai":
+        st.session_state.engine_model_tier = st.radio(
+            "OpenAI 모델 등급",
+            ENGINE_TIER_OPTIONS,
+            index=_option_index(ENGINE_TIER_OPTIONS, st.session_state.get("engine_model_tier", "general")),
+            format_func=lambda key: ENGINE_TIER_LABELS.get(key, key),
+            horizontal=True,
+        )
+
     ad_a, ad_b = st.columns([0.30, 0.70])
     with ad_a:
         _render_button_choice("광고 톤", AD_TONE_OPTIONS, "ad_tone", columns=2)
@@ -489,6 +522,22 @@ def _render_ad_content_step(ctx: dict[str, Any]) -> None:
         if _operator_mode():
             _render_ai_status(ctx["fetch_security_config"]())
     st.session_state.extra_request = st.text_area("추가 요청", st.session_state.extra_request, height=110)
+
+    if st.session_state.get("setup_composition_b64"):
+        st.session_state.use_setup_composition = st.checkbox(
+            "3D 셋업 구도를 이미지 기준으로 사용",
+            value=st.session_state.get("use_setup_composition", True),
+            help="Step 3에서 만든 데스크 셋업 구도를 실사 이미지 생성의 구도 기준으로 전달합니다.",
+        )
+        if st.session_state.use_setup_composition:
+            with st.expander("셋업 구도 미리보기", expanded=False):
+                import base64 as _b64
+
+                st.image(
+                    _b64.b64decode(st.session_state.setup_composition_b64),
+                    caption="img2img 구도 기준",
+                    use_container_width=True,
+                )
 
     col_copy, col_image, col_poster = st.columns(3)
     if col_copy.button("광고 문구 생성", type="secondary", use_container_width=True):

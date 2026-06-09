@@ -124,6 +124,15 @@ _DEFAULT_SHOT_BY_CHANNEL = {
     "유튜브 쇼츠": "eye_level",
 }
 
+
+def _resolve_shot_type(payload: dict) -> str:
+    """입력 shot_type 우선, 없으면 채널 기본값(없으면 hero)으로 구도 종류를 정한다."""
+    shot_type = sanitize_user_text(payload.get("shot_type", ""), limit=20)
+    if shot_type in _COMPOSITION_TEMPLATES:
+        return shot_type
+    channel = sanitize_user_text(payload.get("target_channel", "인스타그램"), limit=30)
+    return _DEFAULT_SHOT_BY_CHANNEL.get(channel, "hero")
+
 # 색온도 (PART 7-M-4). 조명(_IMAGE_DIRECTION_BY_TONE)과 같은 소스(ad_tone)에서 파생해
 # "따뜻한 조명 + 차가운 색온도" 같은 모순을 원천 차단한다. 5500K가 광고용 기본값.
 _COLOR_TEMP_BY_TONE = {
@@ -742,14 +751,56 @@ def _normalize_text_provider(provider: str) -> str:
     return TEXT_PROVIDER_ALIASES.get(key, key)
 
 
-def _copy_adapter(name: str) -> ChatCompletionAdapter | HyperClovaDirectAdapter:
+# 3개 평가 트랙(생성 엔진) → 텍스트 provider / 이미지 backend 매핑.
+#   openai      : OpenAI API (텍스트=OpenAI, 이미지=OpenAI Images)
+#   hyperclova  : HyperCLOVA (텍스트=HyperCLOVA, 이미지=ComfyUI FLUX)
+#   local       : 로컬 텍스트 모델 + ComfyUI (텍스트=local, 이미지=ComfyUI FLUX)
+ENGINE_TEXT_PROVIDER = {"openai": "openai", "hyperclova": "hyperclova", "local": "local"}
+ENGINE_IMAGE_BACKEND = {"openai": "openai", "hyperclova": "comfyui", "local": "comfyui"}
+# OpenAI 모델 등급(일반/고성능) → 모델 ID. OPENAI_TEXT_MODEL_<TIER> / OPENAI_IMAGE_MODEL_<TIER> env로 재정의 가능.
+OPENAI_TEXT_MODEL_BY_TIER = {"general": "gpt-5.4-mini", "performance": "gpt-5.4"}
+OPENAI_IMAGE_MODEL_BY_TIER = {"general": "gpt-image-1-mini", "performance": "gpt-image-2"}
+
+
+def _engine(payload: dict) -> str:
+    return (str(payload.get("engine") or "auto")).strip().lower()
+
+
+def _engine_text_provider(payload: dict) -> str | None:
+    """선택 엔진의 텍스트 provider. auto/미지정이면 None(서버 기본값 사용)."""
+    return ENGINE_TEXT_PROVIDER.get(_engine(payload))
+
+
+def _engine_image_backend(payload: dict) -> str | None:
+    """선택 엔진의 이미지 backend. auto/미지정이면 None(서버 기본값 사용)."""
+    return ENGINE_IMAGE_BACKEND.get(_engine(payload))
+
+
+def _engine_model_tier(payload: dict) -> str:
+    tier = (str(payload.get("engine_model_tier") or "general")).strip().lower()
+    return tier if tier in {"general", "performance"} else "general"
+
+
+def _openai_text_model(payload: dict) -> str:
+    tier = _engine_model_tier(payload)
+    env_override = os.getenv(f"OPENAI_TEXT_MODEL_{tier.upper()}", "").strip()
+    return env_override or OPENAI_TEXT_MODEL_BY_TIER.get(tier) or get_settings().openai_text_model or "gpt-5.4-mini"
+
+
+def _openai_image_model(payload: dict) -> str:
+    tier = _engine_model_tier(payload)
+    env_override = os.getenv(f"OPENAI_IMAGE_MODEL_{tier.upper()}", "").strip()
+    return env_override or get_settings().openai_image_model or OPENAI_IMAGE_MODEL_BY_TIER.get(tier) or "gpt-image-1-mini"
+
+
+def _copy_adapter(name: str, payload: dict | None = None) -> ChatCompletionAdapter | HyperClovaDirectAdapter:
     settings = get_settings()
     name = _normalize_text_provider(name)
     if name == "openai":
         return ChatCompletionAdapter(
             name="openai",
             base_url=settings.openai_base_url,
-            model=settings.openai_text_model,
+            model=_openai_text_model(payload) if payload is not None else settings.openai_text_model,
             api_key=settings.openai_api_key,
             default_model="gpt-4o-mini",
             require_api_key=True,
@@ -914,7 +965,7 @@ def generate_ad_copy(payload: dict, provider_override: str | None = None, *, for
     from .runtime_workers import ensure_text_worker, schedule_idle_reap
 
     settings = get_settings()
-    provider = _normalize_text_provider(provider_override or settings.ai_provider)
+    provider = _normalize_text_provider(provider_override or _engine_text_provider(payload) or settings.ai_provider)
     errors: list[str] = []
     # 자유텍스트(소구점 240·추가요청 400)에 인젝션 시도가 있었는지 프롬프트 진입 전 1회 판정.
     injection_flagged = _flag_prompt_injection(
@@ -928,7 +979,7 @@ def generate_ad_copy(payload: dict, provider_override: str | None = None, *, for
         )
 
     for provider_name in _provider_order(provider):
-        adapter = _copy_adapter(provider_name)
+        adapter = _copy_adapter(provider_name, payload)
         if not adapter.available:
             if provider != "auto":
                 errors.append(f"{adapter.name}: not configured")
@@ -998,14 +1049,17 @@ def generate_copy_experiment(payload: dict, providers: list[str] | None = None, 
     from .result_cache import get_text_cache, make_text_cache_key, put_text_cache
     from .runtime_workers import ensure_text_worker, schedule_idle_reap
 
-    selected = providers or ["hyperclova", "kanana", "midm", "local", "fallback"]
+    # 기본 3개 평가 트랙(엔진) + 규칙 기반 fallback.
+    selected = providers or ["openai", "hyperclova", "local", "fallback"]
     results = []
     for provider in selected:
         provider_id = _normalize_text_provider(provider)
         if provider_id == "fallback":
-            results.append({"provider": provider_id, "status": "ok", "runtime_name": "rule_based", "model": "규칙 기반 (AI 미사용)", "copy": generate_ad_copy(payload, provider_override="fallback")})
+            started = time.time()
+            fallback_copy = generate_ad_copy(payload, provider_override="fallback")
+            results.append({"provider": provider_id, "status": "ok", "runtime_name": "rule_based", "model": "규칙 기반 (AI 미사용)", "elapsed_ms": int((time.time() - started) * 1000), "copy": fallback_copy})
             continue
-        adapter = _copy_adapter(provider_id)
+        adapter = _copy_adapter(provider_id, payload)
         if not adapter.available:
             results.append(
                 {
@@ -1023,17 +1077,18 @@ def generate_copy_experiment(payload: dict, providers: list[str] | None = None, 
             cache_key = make_text_cache_key(payload, provider_id, adapter.model or adapter.default_model)
             cached = get_text_cache(cache_key)
             if cached is not None:
-                results.append({"provider": provider_id, "status": "ok", "runtime_name": adapter.name, "model": adapter.model or adapter.default_model, "copy": apply_copy_policy(payload, cached), "cache_hit": True})
+                results.append({"provider": provider_id, "status": "ok", "runtime_name": adapter.name, "model": adapter.model or adapter.default_model, "elapsed_ms": 0, "cache_hit": True, "copy": apply_copy_policy(payload, cached)})
                 continue
 
         ensure_text_worker(start_managed_worker=_uses_managed_text_worker(adapter))
+        started = time.time()
         try:
             result = apply_copy_policy(payload, _chat_copy(payload, adapter))
             cache_key = make_text_cache_key(payload, provider_id, adapter.model or adapter.default_model)
             put_text_cache(cache_key, result)
-            results.append({"provider": provider_id, "status": "ok", "runtime_name": adapter.name, "model": adapter.model or adapter.default_model, "copy": result})
+            results.append({"provider": provider_id, "status": "ok", "runtime_name": adapter.name, "model": adapter.model or adapter.default_model, "elapsed_ms": int((time.time() - started) * 1000), "copy": result})
         except Exception as exc:
-            results.append({"provider": provider_id, "status": "error", "error": str(exc)})
+            results.append({"provider": provider_id, "status": "error", "elapsed_ms": int((time.time() - started) * 1000), "error": str(exc)})
 
     schedule_idle_reap()
     return {"providers": available_text_providers()["providers"], "results": results}
@@ -1115,6 +1170,55 @@ def describe_color_ko(value: object) -> str:
     return f"{nearest[1]} ({text.lower()})"
 
 
+# 셋업 구성품 id → 영어 단수 명사 (이미지 프롬프트 인벤토리용). 미정의 id는 _ 제거로 폴백.
+_ASSET_EN_NOUN = {
+    "mouse": "wireless mouse",
+    "monitor": "computer monitor",
+    "monitor_arm": "monitor arm",
+    "monitor_light_bar": "monitor light bar",
+    "deskmat": "desk mat",
+    "desk_lamp": "desk lamp",
+    "plant": "small potted plant",
+    "speakers": "pair of desktop speakers",
+    "desk_shelf": "monitor riser shelf",
+    "headphone_stand": "headphone stand",
+    "phone_stand": "phone stand",
+    "coffee_mug": "coffee mug",
+    "digital_clock": "small digital clock",
+    "aroma_diffuser": "aroma diffuser",
+    "wireless_charger": "wireless charging pad",
+    "pen_holder": "pen holder",
+    "book_stack": "small stack of books",
+    "humidifier": "compact humidifier",
+    "photo_frame": "photo frame",
+    "usb_hub": "USB hub",
+    "mouse_pad_round": "round mouse pad",
+}
+
+
+def _scene_inventory_clause(payload: dict) -> str:
+    """선택한 셋업 구성품을 '각 1개씩' 인벤토리로 명시하는 프롬프트 조각.
+
+    speakers(스피커 한 쌍)처럼 본래 복수인 항목을 제외하면, 나머지는 정확히 1개만
+    등장하도록 강제해 마우스/소품 복제를 줄인다. 구성품이 없으면 키보드/책상만 명시.
+    """
+    seen: list[str] = []
+    for raw in payload.get("assets", []) or []:
+        asset_id = sanitize_user_text(raw, limit=40)
+        if not asset_id or asset_id in {"keyboard", "desk"} or asset_id in seen:
+            continue
+        seen.append(asset_id)
+    nouns = [_ASSET_EN_NOUN.get(asset_id, asset_id.replace("_", " ")) for asset_id in seen]
+    if not nouns:
+        return "[scene inventory] the scene contains exactly one keyboard on one desk and nothing else. "
+    items = ", ".join(f"one {noun}" for noun in nouns)
+    return (
+        "[scene inventory] the desk holds exactly one keyboard and one desk, plus exactly one of each of these "
+        f"and nothing more: {items}. Show each item once only — never duplicate the mouse or any accessory, "
+        "and do not invent extra gadgets, cups, or peripherals beyond this list. "
+    )
+
+
 def build_image_prompt(payload: dict, copy_result: dict) -> str:
     assets_value = ", ".join(sanitize_user_text(a, limit=40) for a in payload.get("assets", []) if a)
     assets = assets_value or "keyboard, deskmat, monitor"
@@ -1175,10 +1279,7 @@ def build_image_prompt(payload: dict, copy_result: dict) -> str:
     extra = sanitize_user_text(payload.get("extra_request", ""), limit=400)
 
     # 구도 선택: 입력 shot_type 우선, 없으면 채널 기본값 (PART 7-M-2/M-3)
-    channel = sanitize_user_text(payload.get("target_channel", "인스타그램"), limit=30)
-    shot_type = sanitize_user_text(payload.get("shot_type", ""), limit=20)
-    if shot_type not in _COMPOSITION_TEMPLATES:
-        shot_type = _DEFAULT_SHOT_BY_CHANNEL.get(channel, "hero")
+    shot_type = _resolve_shot_type(payload)
     comp = _COMPOSITION_TEMPLATES[shot_type]
 
     # 장면(scene)에 맞춰 [subject]·조명을 일관되게 구성 (구도-장면 모순 제거)
@@ -1210,12 +1311,17 @@ def build_image_prompt(payload: dict, copy_result: dict) -> str:
 
     has_reference = bool(payload.get("reference_asset_path"))
 
+    # 셋업 구성품을 "각 1개씩"으로 명시 → 마우스가 2개로 복제되거나 엉뚱한 소품이 추가되는
+    # 디퓨전 모델의 대표 실패를 억제한다. macro 컷은 키보드 클로즈업이라 인벤토리를 생략.
+    inventory = _scene_inventory_clause(payload) if comp["scene"] != "macro" else ""
+
     parts = [
         f"Premium Korean e-commerce advertising key visual of {product}; {comp['angle']}. ",
         subject,
         # 키보드는 디퓨전 모델이 가장 틀리기 쉬운 피사체 → 정확도 가드 (왜곡 방지는 [negative]가 담당, 여기선 양성 신호만)
         "[keyboard fidelity] anatomically correct mechanical keyboard, exact key count for the layout, "
         "evenly aligned keycaps in straight rows, crisp readable keycap legends, accurate proportions. ",
+        inventory,
         # 구도(angle)는 오프닝 문장에 이미 명시 → 여기선 무드·프레이밍만 (중복 제거)
         f"[composition] {mood}, rule-of-thirds, {comp['framing']}, magazine-quality marketing layout. ",
         f"[lighting & camera] {lighting}, {color_temp}; {comp['lens']}, {scene_light}, "
@@ -1225,9 +1331,11 @@ def build_image_prompt(payload: dict, copy_result: dict) -> str:
         "[text policy] do not render any marketing text, captions, watermark, or logos in the image "
         "(product keycap legends are fine); keep clean empty negative space for a Korean headline and CTA to be overlaid later. ",
         # 도메인 특화 네거티브: 키보드 생성의 대표 실패모드(녹은/뜬 키캡, 행 뒤틀림, 키보드 중복 등) 차단
+        # + 구도 무결성(마우스 복제, 엉뚱한 케이블 연결) 차단
         "[negative] no brand logos, no copyrighted imagery, no watermark, no distorted or melted keycaps, "
-        "no floating keys, no warped or crooked rows, no duplicate or second keyboard, no extra fingers or hands, "
-        "no gibberish or unreadable text. ",
+        "no floating keys, no warped or crooked rows, no duplicate or second keyboard, no two mice, "
+        "no duplicated or extra peripherals, no random extra gadgets, no cables plugged into plants or "
+        "unrelated objects, no tangled or floating wires, no extra fingers or hands, no gibberish or unreadable text. ",
     ]
     if has_reference:
         # 실제 3D 렌더가 있으면 그 구성 그대로 맞춰 '설정한 제품과 일치하는 광고' 보장 (서비스 핵심 약속)
@@ -1274,7 +1382,16 @@ def _wrap(text: str, width: int, max_lines: int = 3) -> list[str]:
     text = str(text or "")
     if len(text) <= width:
         return [text]
-    lines = textwrap.wrap(text, width=width, break_long_words=False, replace_whitespace=False)
+    wrapped = textwrap.wrap(text, width=width, break_long_words=False, replace_whitespace=False)
+    # break_long_words=False는 공백 없는 긴 토큰(예: 띄어쓰기 없는 한글 headline)을
+    # width를 넘는 한 줄로 그대로 남겨 캔버스 밖으로 넘친다. 단어 경계 wrap 뒤에도
+    # width를 초과하는 줄은 글자수 기준으로 강제 분할하는 폭 가드.
+    lines: list[str] = []
+    for line in wrapped:
+        while len(line) > width:
+            lines.append(line[:width])
+            line = line[width:]
+        lines.append(line)
     if len(lines) <= max_lines:
         return lines
     clipped = lines[:max_lines]
@@ -1391,6 +1508,40 @@ def _hero_image_svg(
     )
 
 
+def _relative_luminance(rgb: tuple[int, int, int]) -> float:
+    def _chan(value: int) -> float:
+        c = value / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = rgb
+    return 0.2126 * _chan(r) + 0.7152 * _chan(g) + 0.0722 * _chan(b)
+
+
+def _contrast_ratio(c1: tuple[int, int, int], c2: tuple[int, int, int]) -> float:
+    l1, l2 = _relative_luminance(c1), _relative_luminance(c2)
+    hi, lo = max(l1, l2), min(l1, l2)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _contrast_button_colors(ink: str, accent: str, bg: str) -> tuple[str, str]:
+    """CTA 버튼의 (글자색, 버튼색)을 반환한다.
+
+    accent 위 글자 대비가 WCAG AA(4.5:1)를 넘으면 accent 버튼을 쓰고, 부족하면 잉크
+    배경 버튼으로 강제해 어떤 팔레트(특히 minimal)에서도 CTA가 또렷하게 보이게 한다.
+    """
+    ink_rgb = _hex_to_rgb(ink) or (40, 40, 40)
+    accent_rgb = _hex_to_rgb(accent) or ink_rgb
+    bg_rgb = _hex_to_rgb(bg) or (255, 255, 255)
+    white = (255, 255, 255)
+    best_ratio, best_text = max(
+        ((_contrast_ratio(accent_rgb, white), "#ffffff"), (_contrast_ratio(accent_rgb, ink_rgb), ink)),
+        key=lambda t: t[0],
+    )
+    if best_ratio >= 4.5:
+        return best_text, accent
+    text = bg if _contrast_ratio(ink_rgb, bg_rgb) >= 4.5 else "#ffffff"
+    return text, ink
+
+
 def _minimal_card_svg(payload: dict, copy_result: dict, image_b64: PosterImageInput) -> str:
     width, height = _ratio_size(payload.get("image_ratio", "1:1"))
     theme = payload.get("theme", "minimal")
@@ -1403,9 +1554,10 @@ def _minimal_card_svg(payload: dict, copy_result: dict, image_b64: PosterImageIn
     subcopy = html.escape(copy_result.get("subcopy") or "3D 셋업 미리보기 기반 광고 콘텐츠")
     cta = html.escape(copy_result.get("cta") or "지금 확인하기")
 
-    headline_lines = _wrap(headline, 18)
-    # subcopy 목표 길이(~80자)가 줄 수 부족으로 "…"로 잘리지 않도록 4줄까지 허용.
-    subcopy_lines = _wrap(subcopy, 30, 4)
+    # 헤드라인이 3줄 이상이면 서브카피·히어로 영역을 침범해 글자가 잘려 보인다 → 2줄로 제한.
+    headline_lines = _wrap(headline, 18, 2)
+    # subcopy 목표 길이(~80자)가 줄 수 부족으로 "…"로 잘리지 않도록 3줄까지 허용.
+    subcopy_lines = _wrap(subcopy, 30, 3)
     headline_svg = "".join(
         f'<text x="{int(width*0.08)}" y="{int(height*0.13) + i*58}" font-size="48" font-weight="800" fill="{ink}">{line}</text>'
         for i, line in enumerate(headline_lines)
@@ -1420,12 +1572,15 @@ def _minimal_card_svg(payload: dict, copy_result: dict, image_b64: PosterImageIn
     hero_w = int(width * 0.74)
     hero_h = int(height * 0.36)
     hero_svg = _hero_image_svg(payload, _first_poster_image(image_b64), hero_x, hero_y, hero_w, hero_h, wood, ink)
+    # CTA는 항상 또렷하게 보이도록 고대비(잉크 배경 + 밝은 글자)로 칠한다. minimal 팔레트의
+    # 흐린 accent로는 CTA가 배경에 묻혀 "생략된 것처럼" 보이던 문제를 막는다.
+    cta_text_fill, cta_fill = _contrast_button_colors(ink, accent, bg)
     cta_svg = _cta_button_svg(
         x=int(width * 0.08),
         y=int(height * 0.89),
         cta=cta,
-        fill=accent,
-        text_fill=bg,
+        fill=cta_fill,
+        text_fill=cta_text_fill,
         max_width=int(width * 0.44),
         min_width=int(width * 0.22),
         height=62,
@@ -1762,9 +1917,14 @@ def generate_local_image_reference(payload: dict, image_prompt: str) -> dict | N
 
 def generate_openai_image_reference(payload: dict, image_prompt: str) -> dict | None:
     settings = get_settings()
-    if not settings.has_openai_image:
-        return None
-    model = settings.openai_image_model.strip().lower()
+    model = _openai_image_model(payload).strip().lower()
+    if not (settings.has_openai_key and model):
+        return {
+            "provider": "openai_image",
+            "model": model or "unset",
+            "error": "OpenAI 이미지 생성에는 OPENAI_API_KEY가 필요합니다 (이미지 모델 미설정).",
+            "has_image": False,
+        }
     request_payload: dict = {}
     try:
         width, height = _image_dimensions(payload)
@@ -1840,10 +2000,12 @@ def generate_openai_image_reference(payload: dict, image_prompt: str) -> dict | 
 
 def generate_image_reference(payload: dict, image_prompt: str) -> dict | None:
     settings = get_settings()
-    backend = settings.image_model_backend.lower()
+    # 선택 엔진이 backend를 강제(openai→OpenAI, hyperclova/local→comfyui). comfyui는
+    # 비동기 job 경로 전용이라 이 동기 임베드 함수에서는 None을 반환(포스터가 이미지 없이 생성).
+    backend = (_engine_image_backend(payload) or settings.image_model_backend).lower()
     errors: list[str] = []
 
-    if backend in {"auto", "openai"} and settings.has_openai_image:
+    if backend == "openai" or (backend == "auto" and settings.has_openai_image):
         result = generate_openai_image_reference(payload, image_prompt)
         if isinstance(result, dict) and result.get("has_image"):
             return result
@@ -1852,7 +2014,7 @@ def generate_image_reference(payload: dict, image_prompt: str) -> dict | None:
             if backend == "openai":
                 return {**result, "error": "; ".join(errors)}
 
-    if backend in {"auto", "local", "local_endpoint"} and settings.has_local_image:
+    if backend in {"local", "local_endpoint"} or (backend == "auto" and settings.has_local_image):
         result = generate_local_image_reference(payload, image_prompt)
         if isinstance(result, dict) and result.get("has_image"):
             return result
@@ -1987,7 +2149,7 @@ def _select_workflow_path(payload: dict) -> Path | None:
     return _resolve_workflow_path(settings.comfyui_workflow_path)
 
 
-def _workflow_placeholder_mapping(settings, image_prompt: str, width: int, height: int) -> dict:
+def _workflow_placeholder_mapping(settings, image_prompt: str, width: int, height: int, *, denoise: float | None = None) -> dict:
     """Build {key}/{{key}} → value map for workflow placeholder substitution."""
     seed = int(time.time() * 1000) % 2147483647
     values = {
@@ -2002,6 +2164,7 @@ def _workflow_placeholder_mapping(settings, image_prompt: str, width: int, heigh
         "lora_strength": settings.comfyui_lora_strength,
         "controlnet_image": settings.comfyui_controlnet_image,
         "controlnet_strength": settings.comfyui_controlnet_strength,
+        "denoise": settings.comfyui_img2img_denoise if denoise is None else denoise,
     }
     mapping: dict = {}
     for key, val in values.items():
@@ -2010,14 +2173,89 @@ def _workflow_placeholder_mapping(settings, image_prompt: str, width: int, heigh
     return mapping
 
 
+def _resize_reference_to_ratio(image_bytes: bytes, payload: dict) -> bytes | None:
+    """레퍼런스 이미지를 요청 image_ratio 해상도로 cover-crop(중앙) 후 PNG로 반환.
+
+    실패하면 None(호출부가 원본 유지). PIL ImageOps.fit이 비율을 맞추며 중앙 크롭한다.
+    """
+    try:
+        import io
+
+        from PIL import Image, ImageOps
+
+        width, height = _image_dimensions(payload)
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            fitted = ImageOps.fit(img.convert("RGB"), (width, height), method=Image.LANCZOS)
+            out = io.BytesIO()
+            fitted.save(out, format="PNG")
+            return out.getvalue()
+    except Exception:
+        return None
+
+
+def _upload_reference_to_comfyui(payload: dict, settings) -> str | None:
+    """선택 도면(래스터 b64)을 ComfyUI `/upload/image`에 올리고 LoadImage용 파일명 반환.
+
+    img2img 워크플로의 ``{reference_image_name}``(LoadImage→VAEEncode) 자리를 채운다.
+    ComfyUI LoadImage는 input 폴더의 파일명만 받으므로 b64를 직접 못 넣는다 → 먼저 업로드.
+    레퍼런스가 없거나 업로드 실패면 None(호출부가 img2img 불가로 처리).
+    """
+    # 구도 맵 레퍼런스는 채널 앵글에 맞춰 투영 선택: top_down 채널이면 flat-lay 맵을,
+    # 그 외(hero/eye-level/wide)는 원근 맵을 쓴다 → img2img init과 프롬프트 앵글 일치.
+    b64 = None
+    if payload.get("reference_is_composition") and _resolve_shot_type(payload) == "top_down":
+        b64 = payload.get("reference_image_topdown_b64")
+    if not b64:
+        b64 = _reference_image_b64(payload)
+    if not b64:
+        return None
+    try:
+        raw = b64.split(",", 1)[1] if b64.startswith("data:") else b64
+        image_bytes = base64.b64decode(raw)
+    except Exception:
+        return None
+    # img2img 출력 종횡비는 입력(VAEEncode) 크기를 그대로 따른다 → 레퍼런스를 요청 비율로
+    # cover-crop해 올려야 사용자가 고른 image_ratio가 결과에 반영된다(handoff §1-2).
+    image_bytes = _resize_reference_to_ratio(image_bytes, payload) or image_bytes
+    try:
+        response = requests.post(
+            f"{settings.comfyui_base_url.rstrip('/')}/upload/image",
+            files={"image": ("deskad_reference.png", image_bytes, "image/png")},
+            data={"overwrite": "true"},
+            timeout=settings.request_timeout_seconds,
+        )
+        response.raise_for_status()
+        info = response.json()
+    except Exception:
+        return None
+    name = info.get("name")
+    if not name:
+        return None
+    subfolder = info.get("subfolder")
+    return f"{subfolder}/{name}" if subfolder else name
+
+
 def _load_comfyui_workflow(payload: dict, image_prompt: str) -> dict | None:
     settings = get_settings()
     workflow_path = _select_workflow_path(payload)
     if not workflow_path or not workflow_path.exists():
         return None
     width, height = _image_dimensions(payload)
-    mapping = _workflow_placeholder_mapping(settings, image_prompt, width, height)
-    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    # 셋업 구도 맵(평면 색블록)은 라인아트 도면보다 높은 denoise라야 사실감이 생긴다.
+    # → 구도 맵 레퍼런스면 composition denoise, 그 외(도면)는 기존 img2img denoise.
+    denoise = settings.comfyui_composition_denoise if payload.get("reference_is_composition") else None
+    mapping = _workflow_placeholder_mapping(settings, image_prompt, width, height, denoise=denoise)
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    # img2img: 워크플로가 {reference_image_name}을 참조하면 선택 도면을 ComfyUI에
+    # 업로드해 그 파일명으로 치환한다. 레퍼런스가 없거나 업로드 실패면 워크플로를
+    # 구동할 입력 이미지가 없으므로 None(호출부가 draft로 처리).
+    if "{reference_image_name}" in workflow_text:
+        uploaded = _upload_reference_to_comfyui(payload, settings)
+        if not uploaded:
+            return None
+        mapping["{reference_image_name}"] = uploaded
+        mapping["{{reference_image_name}}"] = uploaded
+    workflow = json.loads(workflow_text)
     return _replace_workflow_placeholders(workflow, mapping)
 
 
@@ -2221,9 +2459,13 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
         "prompt_preview": image_prompt[:700],
         "backend_config": {**_image_backend_config(), "aspect_ratio": requested_ratio},
     }
-    backend = settings.image_model_backend.lower()
+    # 선택 엔진이 이미지 backend를 강제한다. 엔진을 명시적으로 고르면(openai/comfyui)
+    # 그 backend만 사용하고 다른 backend로 조용히 폴백하지 않는다(평가 트랙 무결성).
+    engine_backend = _engine_image_backend(payload)
+    backend = (engine_backend or settings.image_model_backend).lower()
+    explicit = engine_backend is not None
 
-    if backend in {"auto", "openai"} and settings.has_openai_image:
+    if backend == "openai" or (backend == "auto" and settings.has_openai_image):
         image_reference = generate_openai_image_reference(payload, image_prompt)
         job.update(
             {
@@ -2233,7 +2475,7 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
                 "completed_at": int(time.time()),
             }
         )
-    elif backend in {"auto", "local", "local_endpoint"} and settings.has_local_image:
+    elif backend in {"local", "local_endpoint"} or (backend == "auto" and settings.has_local_image):
         image_reference = generate_local_image_reference(payload, image_prompt)
         job.update(
             {
@@ -2243,14 +2485,26 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
                 "completed_at": int(time.time()),
             }
         )
-    elif backend in {"auto", "comfyui"} and settings.has_comfyui:
-        ensure_image_worker()
-        _submit_comfyui_job(job, payload, image_prompt)
+    elif backend == "comfyui" or (backend == "auto" and settings.has_comfyui):
+        if settings.has_comfyui:
+            ensure_image_worker()
+            _submit_comfyui_job(job, payload, image_prompt)
+        else:
+            job.update(
+                {
+                    "status": "not_configured",
+                    "message": "ComfyUI 엔진이 선택되었으나 COMFYUI_BASE_URL이 설정되지 않았습니다.",
+                }
+            )
     else:
         job.update(
             {
                 "status": "not_configured",
-                "message": "Set OPENAI_IMAGE_MODEL, LOCAL_IMAGE_ENDPOINT, or COMFYUI_BASE_URL + (COMFYUI_WORKFLOWS_DIR or COMFYUI_WORKFLOW_PATH) to enable image generation.",
+                "message": (
+                    "선택한 OpenAI 엔진에는 OPENAI_API_KEY가 필요합니다."
+                    if explicit and backend == "openai"
+                    else "Set OPENAI_API_KEY, LOCAL_IMAGE_ENDPOINT, or COMFYUI_BASE_URL + (COMFYUI_WORKFLOWS_DIR or COMFYUI_WORKFLOW_PATH) to enable image generation."
+                ),
             }
         )
 

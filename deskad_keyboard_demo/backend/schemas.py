@@ -66,9 +66,20 @@ class AdContentRequest(DeskSetupRenderRequest):
     extra_request: str = Field(default="깔끔하고 고급스러운 데스크셋업 광고 느낌", max_length=400)
     model_url: str | None = Field(default=None, max_length=400)
     reference_asset_path: str | None = Field(default=None, max_length=400)
+    # 셋업 구도 맵 등 직접 전달하는 img2img 레퍼런스(base64/data URL). 선택 도면보다 우선.
+    reference_image_b64: str | None = Field(default=None, max_length=12_000_000)
+    # 구도 맵의 top-down(flat-lay) 투영. shot_type이 top_down인 채널에서 위 원근 맵 대신 쓴다.
+    reference_image_topdown_b64: str | None = Field(default=None, max_length=12_000_000)
+    # 위 레퍼런스가 셋업 구도 맵(평면 색블록)이면 True → 더 높은 denoise로 사실화.
+    reference_is_composition: bool = False
     image_job_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
     image_workflow: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
     poster_template: str = Field(default="minimal_card", pattern=r"^(minimal_card|grid_three|feature_focus|promo_banner)$")
+    # 평가 트랙(생성 엔진): openai=OpenAI API, hyperclova=HyperCLOVA, local=로컬 텍스트+ComfyUI.
+    # auto는 서버 기본값(AI_PROVIDER/IMAGE_MODEL_BACKEND)을 따른다.
+    engine: str = Field(default="auto", pattern=r"^(auto|openai|hyperclova|local)$")
+    # OpenAI 엔진의 모델 등급(일반/고성능). 다른 엔진에서는 무시된다.
+    engine_model_tier: str = Field(default="general", pattern=r"^(general|performance)$")
     selected_copy: SelectedCopy | None = None
 
 
@@ -93,7 +104,7 @@ class LibraryModelRequest(BaseModel):
 class CopyExperimentRequest(AdContentRequest):
     """여러 provider로 광고 문구를 실험할 요청을 검증한다."""
 
-    providers: list[str] = Field(default_factory=lambda: ["hyperclova", "kanana", "midm", "local", "fallback"])
+    providers: list[str] = Field(default_factory=lambda: ["openai", "hyperclova", "local", "fallback"])
 
 
 class PlateDrawingRenderRequest(BaseModel):

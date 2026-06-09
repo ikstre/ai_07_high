@@ -108,22 +108,70 @@ def _render_setup_preview() -> None:
             st.caption("생성된 결과는 이 영역에 바로 표시되고, 이후 콘텐츠 제작 단계에 연결됩니다.")
 
 
+def _poster_status_badge(poster: dict) -> str:
+    template_label = POSTER_TEMPLATE_LABELS.get(poster.get("poster_template", ""), poster.get("poster_template", ""))
+    image_reference = poster.get("image_reference") or poster.get("local_image_reference") or {}
+    badge = f"`{template_label}`"
+    if poster.get("image_embedded"):
+        badge += " · 이미지 합성"
+    elif image_reference.get("error"):
+        badge += " · 이미지 생성 오류"
+    return badge
+
+
+def _render_poster_downloads(poster: dict, poster_svg: str) -> None:
+    download_a, download_b = st.columns(2)
+    download_a.download_button(
+        "포스터 다운로드 (SVG)",
+        data=poster_svg,
+        file_name=f"deskad_poster_{poster.get('poster_template', 'minimal_card')}.svg",
+        mime="image/svg+xml",
+        use_container_width=True,
+    )
+    try:
+        pptx_data = build_poster_pptx(
+            poster_svg=poster_svg,
+            copy_result=st.session_state.copy_result or poster.get("copy") or {},
+            poster=poster,
+            product=current_product_export_payload(),
+        )
+        download_b.download_button(
+            "포스터 다운로드 (PPTX)",
+            data=pptx_data,
+            file_name=f"deskad_poster_{poster.get('poster_template', 'minimal_card')}.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            use_container_width=True,
+        )
+    except Exception as exc:
+        download_b.caption(f"PPT 생성 실패: {exc}")
+
+
+def _render_poster_result(poster: dict) -> None:
+    st.success("포스터 생성 완료")
+    st.markdown("#### 포스터 미리보기")
+    st.caption(_poster_status_badge(poster))
+    poster_svg = fetch_text_asset(poster["poster_url"])
+    components.html(
+        responsive_svg_document(poster_svg),
+        height=poster_preview_height(poster_svg),
+        scrolling=False,
+    )
+    _render_poster_downloads(poster, poster_svg)
+
+
 def _render_ad_preview() -> None:
     st.markdown("### 광고 미리보기")
     render_studio_status_cards()
-    render_ad_card_preview_section()
-    render_copy_experiment_picker()
 
     poster = st.session_state.poster_result
     if poster:
-        st.markdown("#### 포스터 미리보기")
-        poster_svg = fetch_text_asset(poster["poster_url"])
-        components.html(
-            responsive_svg_document(poster_svg),
-            height=poster_preview_height(poster_svg),
-            scrolling=False,
-        )
+        _render_poster_result(poster)
+        with st.expander("광고 카드 / 문구 미리보기", expanded=False):
+            render_ad_card_preview_section()
+            render_copy_experiment_picker()
     else:
+        render_ad_card_preview_section()
+        render_copy_experiment_picker()
         st.caption("포스터를 생성하면 이 영역에 결과가 표시됩니다.")
 
 
@@ -146,7 +194,7 @@ def _render_step_content(ctx: dict, go_previous, go_next) -> None:
             _render_edit_panel(ctx, go_previous, go_next)
         return
 
-    preview_col, edit_col = st.columns([0.25, 0.75], gap="large")
+    preview_col, edit_col = st.columns([0.36, 0.64], gap="large")
     with preview_col:
         _render_ad_preview()
     with edit_col:
@@ -154,44 +202,12 @@ def _render_step_content(ctx: dict, go_previous, go_next) -> None:
 
 
 def _render_poster_details() -> None:
-    with st.expander("포스터 / 이미지 작업 상세", expanded=bool(st.session_state.poster_result)):
-        st.markdown("### 광고 포스터")
+    with st.expander("포스터 / 이미지 작업 상세", expanded=False):
+        st.markdown("### 포스터 작업 상세")
         poster = st.session_state.poster_result
         if poster:
-            template_label = POSTER_TEMPLATE_LABELS.get(poster.get("poster_template", ""), poster.get("poster_template", ""))
             image_reference = poster.get("image_reference") or poster.get("local_image_reference") or {}
-            badge = f"`{template_label}`"
-            if poster.get("image_embedded"):
-                badge += " · 이미지 합성"
-            elif image_reference.get("error"):
-                badge += " · 이미지 생성 오류"
-            st.caption(badge)
-
-            poster_svg = fetch_text_asset(poster["poster_url"])
-            download_a, download_b = st.columns(2)
-            download_a.download_button(
-                "포스터 다운로드 (SVG)",
-                data=poster_svg,
-                file_name=f"deskad_poster_{poster.get('poster_template', 'minimal_card')}.svg",
-                mime="image/svg+xml",
-                use_container_width=True,
-            )
-            try:
-                pptx_data = build_poster_pptx(
-                    poster_svg=poster_svg,
-                    copy_result=st.session_state.copy_result or poster.get("copy") or {},
-                    poster=poster,
-                    product=current_product_export_payload(),
-                )
-                download_b.download_button(
-                    "포스터 다운로드 (PPTX)",
-                    data=pptx_data,
-                    file_name=f"deskad_poster_{poster.get('poster_template', 'minimal_card')}.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    use_container_width=True,
-                )
-            except Exception as exc:
-                download_b.caption(f"PPT 생성 실패: {exc}")
+            st.caption(_poster_status_badge(poster))
 
             with st.expander("이미지 생성 프롬프트", expanded=False):
                 st.write(poster["image_prompt"])
@@ -199,14 +215,22 @@ def _render_poster_details() -> None:
                 with st.expander("이미지 모델 응답", expanded=False):
                     st.json(image_reference)
         else:
-            st.caption("포스터 생성 후 다운로드와 이미지 상세 정보가 표시됩니다.")
+            st.caption("포스터 생성 후 프롬프트와 이미지 상세 정보가 표시됩니다.")
 
         image_job_result = st.session_state.image_job_result
         if image_job_result:
             job = image_job_result.get("job", {})
             job_id = job.get("job_id")
             with st.expander("실사 이미지 작업 상태", expanded=job.get("status") not in IMAGE_JOB_TERMINAL_STATUSES):
-                st.caption(f"{job.get('provider', 'fallback')} · {job.get('status', 'unknown')} · {job.get('width', '')}×{job.get('height', '')}")
+                started_at = job.get("created_at")
+                finished_at = job.get("completed_at")
+                elapsed_note = ""
+                if isinstance(started_at, (int, float)) and isinstance(finished_at, (int, float)) and finished_at >= started_at:
+                    elapsed_note = f" · 생성 {int(finished_at - started_at)}초"
+                st.caption(
+                    f"{job.get('provider', 'fallback')} · {job.get('status', 'unknown')} · "
+                    f"{job.get('width', '')}×{job.get('height', '')}{elapsed_note}"
+                )
                 col_refresh, col_quality = st.columns(2)
                 if col_refresh.button("이미지 작업 상태 갱신", use_container_width=True):
                     try:
@@ -227,12 +251,19 @@ def _render_poster_details() -> None:
                         st.error(f"품질 검사 실패: {exc}")
                 st.json(job)
             if job.get("status") == "completed":
-                st.caption("완료된 이미지 작업은 다음 포스터 생성 때 자동 합성 후보로 사용됩니다.")
+                st.caption("완료된 이미지 작업은 다음 포스터 생성 시 자동 합성 후보로 사용됩니다.")
             auto_poll_image_job()
             quality = st.session_state.get("image_quality_report")
             if quality and quality.get("report"):
+                report = quality["report"]
                 with st.expander("이미지 품질 검사 결과", expanded=False):
-                    st.json(quality["report"])
+                    st.caption(
+                        f"{report.get('evaluator', 'skeleton')} · "
+                        f"{report.get('width', '')}×{report.get('height', '')} · "
+                        f"{report.get('aspect_ratio_actual', 'unknown')} · "
+                        f"{(report.get('bytes') or 0) // 1024}KB"
+                    )
+                    st.json(report)
 
 
 def render_result_panel(ctx: dict, go_previous, go_next) -> None:

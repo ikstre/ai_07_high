@@ -68,6 +68,7 @@ def render_sidebar(on_step_change: Callable[[], None]) -> None:
             with st.expander("API / 보안 상태", expanded=False):
                 st.caption(f"OpenAI Key: {config.get('openai_api_key', 'unknown')}")
                 st.caption(f"Local LLM: {config.get('local_llm_base_url', 'unknown')}")
+                st.caption(f"ComfyUI: {config.get('comfyui_base_url', 'unknown')}")
                 st.caption(f"STEP Converter: {config.get('step_converter_cmd', 'unknown')}")
                 st.caption("실제 키 값은 화면과 API 응답에 노출하지 않습니다.")
 

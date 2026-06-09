@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from backend import ai, config
 from backend.main import AdContentRequest
@@ -120,3 +121,101 @@ def test_load_workflow_injects_configured_negative_prompt(tmp_path, monkeypatch)
     node = workflow["6"]["inputs"]
     assert node["text"] == "studio keyboard photo"
     assert node["neg"] == "no logos here"
+
+
+# ── img2img(선택 도면 강제) 스파이크 ──────────────────────────────────────────
+
+def test_denoise_placeholder_in_mapping():
+    mapping = ai._workflow_placeholder_mapping(_settings(comfyui_img2img_denoise=0.6), "kbd", 1024, 1024)
+    assert mapping["{denoise}"] == 0.6
+    assert mapping["{{denoise}}"] == 0.6
+
+
+class _UploadResp:
+    def __init__(self, body):
+        self._body = body
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._body
+
+
+def _img2img_dir(tmp_path):
+    wf_dir = tmp_path / "workflows"
+    wf_dir.mkdir()
+    (wf_dir / "flux_img2img.json").write_text(
+        json.dumps(
+            {
+                "14": {"class_type": "LoadImage", "inputs": {"image": "{reference_image_name}"}},
+                "9": {"class_type": "KSampler", "inputs": {"latent_image": ["15", 0], "denoise": "{denoise}"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return wf_dir
+
+
+def test_img2img_uploads_reference_and_substitutes_name(tmp_path, monkeypatch):
+    wf_dir = _img2img_dir(tmp_path)
+    monkeypatch.setattr(
+        ai, "get_settings",
+        lambda: _settings(comfyui_workflows_dir=str(wf_dir), comfyui_base_url="http://comfy", comfyui_img2img_denoise=0.6),
+    )
+    monkeypatch.setattr(ai, "_reference_image_b64", lambda payload: "QUJD")  # base64("ABC")
+    captured = {}
+
+    def _fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["files"] = kwargs.get("files")
+        return _UploadResp({"name": "deskad_reference.png", "subfolder": ""})
+
+    monkeypatch.setattr(ai.requests, "post", _fake_post)
+
+    workflow = ai._load_comfyui_workflow({"image_workflow": "flux_img2img"}, "studio keyboard")
+    assert workflow["14"]["inputs"]["image"] == "deskad_reference.png"
+    assert workflow["9"]["inputs"]["denoise"] == 0.6
+    assert captured["url"].endswith("/upload/image")
+    assert captured["files"]["image"][2] == "image/png"
+
+
+def test_img2img_subfolder_prefixes_filename(tmp_path, monkeypatch):
+    wf_dir = _img2img_dir(tmp_path)
+    monkeypatch.setattr(
+        ai, "get_settings",
+        lambda: _settings(comfyui_workflows_dir=str(wf_dir), comfyui_base_url="http://comfy"),
+    )
+    monkeypatch.setattr(ai, "_reference_image_b64", lambda payload: "QUJD")
+    monkeypatch.setattr(ai.requests, "post", lambda url, **kw: _UploadResp({"name": "ref.png", "subfolder": "deskad"}))
+
+    workflow = ai._load_comfyui_workflow({"image_workflow": "flux_img2img"}, "kbd")
+    assert workflow["14"]["inputs"]["image"] == "deskad/ref.png"
+
+
+def test_img2img_draft_when_no_reference(tmp_path, monkeypatch):
+    wf_dir = _img2img_dir(tmp_path)
+    monkeypatch.setattr(
+        ai, "get_settings",
+        lambda: _settings(comfyui_workflows_dir=str(wf_dir), comfyui_base_url="http://comfy"),
+    )
+    monkeypatch.setattr(ai, "_reference_image_b64", lambda payload: None)
+
+    # 레퍼런스 없으면 업로드할 입력이 없으므로 워크플로 미구동(None → 호출부가 draft).
+    assert ai._load_comfyui_workflow({"image_workflow": "flux_img2img"}, "kbd") is None
+
+
+def test_shipped_img2img_workflow_wires_loadimage_vaeencode_to_ksampler():
+    wf_path = Path(ai.__file__).resolve().parent.parent / "tools" / "comfyui_workflows" / "flux_img2img.json"
+    wf = json.loads(wf_path.read_text(encoding="utf-8"))
+
+    load_id = next(k for k, n in wf.items() if n.get("class_type") == "LoadImage")
+    enc_id = next(k for k, n in wf.items() if n.get("class_type") == "VAEEncode")
+    ks = next(n for n in wf.values() if n.get("class_type") == "KSampler")
+
+    assert wf[load_id]["inputs"]["image"] == "{reference_image_name}"
+    assert wf[enc_id]["inputs"]["pixels"][0] == load_id      # VAEEncode ← LoadImage
+    assert ks["inputs"]["latent_image"][0] == enc_id          # KSampler ← VAEEncode
+    assert ks["inputs"]["denoise"] == "{denoise}"
+    # EmptyLatentImage는 도면 latent로 대체되어 없어야 한다.
+    assert not any(n.get("class_type") == "EmptyLatentImage" for n in wf.values())
