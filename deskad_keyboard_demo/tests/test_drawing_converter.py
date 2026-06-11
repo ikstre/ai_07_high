@@ -79,19 +79,15 @@ def test_glb_passthrough_copies_bytes_and_builds_url(repo, tmp_path):
     assert result["model_file"].endswith(".glb")
 
 
-def test_korean_plate_name_collapses_to_fallback_slug(repo, tmp_path):
-    """현재 동작 문서화: 한글 제품명은 fallback 슬러그로 떨어진다(전수 점검 발견 건).
-
-    실제 수정(전사/UTF-8 허용)이 들어가면 이 단언을 의도적으로 뒤집어야 한다.
-    """
+def test_korean_plate_name_preserved_in_slug(repo, tmp_path):
+    """한글 제품명이 파일명에 보존된다(QA 06-05 지적 → product_slug가 한글 허용)."""
     (repo / "plates" / "k.glb").write_bytes(_minimal_glb())
     plate = {"file_path": "plates/k.glb", "name": "한글 플레이트", "id": "abc123"}
 
     result = drawing_converter.convert_plate_drawing_to_glb(
         plate=plate, model_dir=tmp_path / "m", public_base_url="http://h"
     )
-    # 한글이 ASCII 슬러그에서 소실 → fallback "plate_<id>"가 파일명에 들어간다.
-    assert "plate_abc123" in result["model_file"]
+    assert "한글_플레이트" in result["model_file"]
 
 
 # ── 입력 검증 / 엣지 ────────────────────────────────────────────────────────

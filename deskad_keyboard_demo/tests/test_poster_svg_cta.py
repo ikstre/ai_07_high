@@ -104,3 +104,63 @@ def test_safe_image_reference_redacts_multiple_images_and_reports_count():
     assert public["image_count"] == 3
     assert "image_b64" not in public
     assert "image_b64s" not in public
+
+
+# ── 2026-06-11 이미지 QA(1.md): SPEC 카드 줄바꿈/폰트 축소 ─────────────────────
+def _spec_card_lines(svg: str) -> list[tuple[int, int, str]]:
+    """(x, font_size, text)를 SPEC 카드 영역 bullet 라인만 추려 반환."""
+    from backend.ai import _ratio_size
+
+    lines = []
+    for m in re.finditer(r'<text x="(\d+)" y="\d+" font-size="(\d+)" fill="[^"]+">([^<]*)</text>', svg):
+        lines.append((int(m.group(1)), int(m.group(2)), m.group(3)))
+    # spec 텍스트 x는 카드 내부(이미지 우측)에 있음 — 가장 큰 x 그룹이 카드
+    if not lines:
+        return []
+    spec_x = max(x for x, _, _ in lines)
+    return [item for item in lines if item[0] == spec_x]
+
+
+def test_feature_focus_long_spec_bullet_wraps_within_card():
+    from backend.ai import _estimate_svg_text_width
+
+    copy_result = _copy()
+    copy_result["spec_bullets"] = ["저소음 리니어 스위치와 흡음 폼 구성으로 사무실에서도 조용한 타건감"]
+    svg = create_svg_poster(_payload("feature_focus"), copy_result)
+
+    spec_lines = _spec_card_lines(svg)
+    assert len(spec_lines) >= 2, "긴 bullet은 여러 줄로 wrap되어야 한다"
+    # 1:1 기준 카드 텍스트 폭 = spec_w - 44
+    width = 1080
+    pad = int(width * 0.06)
+    spec_w = width - (pad + int(width * 0.55) + pad) - pad
+    for _, font, text in spec_lines:
+        assert _estimate_svg_text_width(text, font) <= spec_w - 44
+
+
+def test_feature_focus_many_long_bullets_shrink_font_not_overflow():
+    copy_result = _copy()
+    copy_result["spec_bullets"] = [
+        "저소음 리니어 스위치와 흡음 폼 구성으로 조용한 타건감 제공",
+        "알루미늄 CNC 가공 케이스와 가스켓 마운트 구조 적용",
+        "PBT 이중사출 키캡과 체리 프로파일 구성으로 내구성 확보",
+        "남거리 무선 연결과 유선 연결을 모두 지원하는 멀티 페어링",
+    ]
+    svg = create_svg_poster(_payload("feature_focus"), copy_result)
+    spec_lines = _spec_card_lines(svg)
+    fonts = {font for _, font, _ in spec_lines}
+    assert fonts and max(fonts) <= 22
+    # 모든 라인의 y가 카드 안(hero_y ~ hero_y+hero_h)에 있어야 한다
+    height = 1080
+    hero_y, hero_h = int(height * 0.20), int(height * 0.62)
+    ys = [int(m.group(1)) for m in re.finditer(r'<text x="\d+" y="(\d+)" font-size="(?:1[0-9]|2[0-2])" fill', svg)]
+    spec_ys = [y for y in ys if y >= hero_y]
+    assert spec_ys and max(spec_ys) <= hero_y + hero_h + 16
+
+
+def test_wrap_px_splits_spaceless_korean_token():
+    from backend.ai import _wrap_px
+
+    lines = _wrap_px("띄어쓰기없이아주길게이어지는한글스펙문구입니다", font_size=22, max_px=200, max_lines=3)
+    assert len(lines) >= 2
+    assert all(lines)

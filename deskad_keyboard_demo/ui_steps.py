@@ -18,14 +18,25 @@ AD_TONE_OPTIONS = ["프리미엄형", "감성형", "할인형", "기능강조형
 IMAGE_RATIO_OPTIONS = ["1:1", "4:5", "16:9"]
 ENGINE_OPTIONS = ["hyperclova", "openai", "local"]
 ENGINE_LABELS = {
-    "hyperclova": "HyperCLOVA · 한국어 특화",
-    "openai": "OpenAI · 고품질 생성",
-    "local": "로컬 모델 · 내부 실행",
+    "hyperclova": "HyperCLOVA · 전용 로컬",
+    "openai": "OpenAI API",
+    "local": "로컬 텍스트 + ComfyUI",
 }
 ENGINE_TIER_OPTIONS = ["general", "performance"]
 ENGINE_TIER_LABELS = {
     "general": "일반",
     "performance": "고성능",
+}
+# 이미지 구도(샷 타입). ""(자동)이면 채널별 기본 구도로 결정된다.
+# backend/schemas.py AdContentRequest.shot_type 패턴과 키를 맞춘다.
+SHOT_TYPE_OPTIONS = ["", "hero", "top_down", "eye_level", "wide_scene", "detail_macro"]
+SHOT_TYPE_LABELS = {
+    "": "자동 (채널 기본 구도)",
+    "hero": "히어로 샷 (사선 위)",
+    "top_down": "탑다운 플랫레이",
+    "eye_level": "아이레벨 라이프스타일",
+    "wide_scene": "와이드 룸 전경",
+    "detail_macro": "디테일 매크로 (키캡 클로즈업)",
 }
 IMAGE_RATIO_LABELS = {
     "1:1": "1:1 정사각",
@@ -516,12 +527,17 @@ def _render_generic_asset_controls(asset_id: str, ctx: dict[str, Any]) -> None:
 def _render_ad_content_step(ctx: dict[str, Any]) -> None:
     st.markdown("#### 광고 콘텐츠")
 
-    st.session_state.engine = st.selectbox(
+    def _on_engine_change() -> None:
+        # 트랙 전환 시 해당 GPU 워커를 백엔드가 미리 워밍업(논블로킹, 단일 GPU exclusive).
+        ctx["activate_engine_track"](st.session_state.engine)
+
+    st.selectbox(
         "생성 엔진",
         ENGINE_OPTIONS,
-        index=_option_index(ENGINE_OPTIONS, st.session_state.get("engine", "hyperclova")),
+        key="engine",
         format_func=lambda key: ENGINE_LABELS.get(key, key),
         help="광고 문구와 실사 이미지 생성에 사용할 엔진 묶음입니다.",
+        on_change=_on_engine_change,
     )
     if st.session_state.engine == "openai":
         st.session_state.engine_model_tier = st.radio(
@@ -536,6 +552,13 @@ def _render_ad_content_step(ctx: dict[str, Any]) -> None:
     with ad_a:
         _render_button_choice("광고 톤", AD_TONE_OPTIONS, "ad_tone", columns=2)
         _render_button_choice("이미지 비율", IMAGE_RATIO_OPTIONS, "image_ratio", columns=3)
+        st.session_state.shot_type = st.selectbox(
+            "이미지 구도",
+            SHOT_TYPE_OPTIONS,
+            index=_option_index(SHOT_TYPE_OPTIONS, st.session_state.get("shot_type", "")),
+            format_func=lambda key: SHOT_TYPE_LABELS.get(key, key),
+            help="실사 이미지의 카메라 구도입니다. 자동이면 타깃 채널에 맞는 구도를 사용합니다.",
+        )
     with ad_b:
         _render_poster_template_cards(ctx)
         if _operator_mode():
@@ -562,10 +585,11 @@ def _render_ad_content_step(ctx: dict[str, Any]) -> None:
     if col_copy.button("광고 문구 생성", type="secondary", use_container_width=True):
         progress = st.progress(0, text="광고 문구 생성 준비 중")
         try:
-            progress.progress(30, text="엔진별 문구 후보 생성 중")
-            ctx["generate_copy_experiment"]()
+            engine_label = ENGINE_LABELS.get(st.session_state.get("engine", "hyperclova"), "선택 엔진")
+            progress.progress(30, text=f"{engine_label} 문구 변형 생성 중")
+            ctx["generate_copy_variants"]()
             progress.progress(100, text="광고 문구 생성 완료")
-            st.success("광고 문구 후보 생성 완료")
+            st.success("광고 문구 변형 생성 완료 — 마음에 드는 후보를 선택하세요")
             st.rerun()
         except Exception as exc:
             progress.empty()
@@ -618,15 +642,25 @@ def _operator_mode() -> bool:
 
 
 def _render_ai_status(config_now: dict) -> None:
-    local_llm_status = "on" if config_now.get("local_llm_base_url") == "set" else "off"
-    hyperclova_status = "on" if config_now.get("hyperclova_base_url") == "set" else "off"
+    local_text_status = "on" if any(
+        config_now.get(key) == "set" for key in ("local_llm_base_url", "kanana_base_url", "midm_base_url")
+    ) else "off"
+    hyperclova_text_status = "on" if config_now.get("hyperclova_base_url") == "set" else "off"
+    hyperclova_image_status = "on" if config_now.get("hyperclova_image_configured") else "off"
     kanana_status = "on" if config_now.get("kanana_base_url") == "set" else "off"
     midm_status = "on" if config_now.get("midm_base_url") == "set" else "off"
-    openai_status = "on" if config_now.get("openai_api_key") == "set" else "off"
-    local_img_status = "on" if config_now.get("local_image_endpoint") == "set" else "off"
+    openai_text_status = "on" if config_now.get("openai_api_key") == "set" else "off"
+    openai_image_status = "on" if config_now.get("openai_api_key") == "set" else "off"
     comfyui_status = "on" if config_now.get("comfyui_base_url") == "set" else "off"
     st.caption(
-        f"AI: OpenAI {openai_status} · Local {local_llm_status} · HyperCLOVA {hyperclova_status} · "
+        f"Tracks: OpenAI text/img {openai_text_status}/{openai_image_status} · "
+        f"HyperCLOVA text/img {hyperclova_text_status}/{hyperclova_image_status} · "
+        f"Local text/img {local_text_status}/{comfyui_status}"
+    )
+    st.caption(
+        f"Local text candidates: base {local_text_status} · Kanana {kanana_status} · Mi:dm {midm_status}"
+    )
+    st.caption(
+        f"AI providers: OpenAI {openai_text_status} · HyperCLOVA {hyperclova_text_status} · "
         f"Kanana {kanana_status} · Mi:dm {midm_status}"
     )
-    st.caption(f"Image {config_now.get('image_model_backend', 'auto')} / local {local_img_status} / ComfyUI {comfyui_status}")

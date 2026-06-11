@@ -204,7 +204,9 @@ def _run_step_converter(input_path: Path, output_path: Path) -> tuple[bool, str]
     except Exception as exc:
         return False, f"STEP converter failed to start: {exc}"
 
-    if result.returncode != 0 or not output_path.exists():
+    # unique_timestamped_model_path가 경로를 원자적으로 선점하며 빈 파일을 만들어 두므로,
+    # 존재 여부만으로는 변환 성공을 판정할 수 없다 → 내용이 실제로 쓰였는지(size>0)까지 본다.
+    if result.returncode != 0 or not output_path.exists() or output_path.stat().st_size == 0:
         stderr = (result.stderr or result.stdout or "").strip()[-500:]
         return False, f"STEP converter returned {result.returncode}: {stderr}"
     return True, "STEP converted to GLB."

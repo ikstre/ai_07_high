@@ -71,6 +71,18 @@ def api_post(path: str, payload: dict, timeout: int = 30) -> dict:
     return response.json()
 
 
+def activate_engine_track(track: str) -> dict:
+    """선택한 생성 엔진(트랙)의 GPU 워커를 백엔드에 미리 워밍업시킨다.
+
+    백엔드가 daemon thread로 처리하므로 빠르게 반환된다. 실패해도 실제 생성
+    경로의 ensure_*_worker가 다시 보장하므로 UI에서는 조용히 무시한다.
+    """
+    try:
+        return api_post("/ai/activate_track", {"track": track}, timeout=10)
+    except Exception:
+        return {}
+
+
 def to_internal_api_url(url: str) -> str:
     if PUBLIC_API_BASE != API_BASE and url.startswith(PUBLIC_API_BASE):
         return API_BASE + url[len(PUBLIC_API_BASE):]
@@ -178,6 +190,8 @@ def fetch_security_config() -> dict:
             "openai_api_key": "unknown",
             "local_llm_base_url": "unknown",
             "hyperclova_base_url": "unknown",
+            "hyperclova_vision_configured": "unknown",
+            "hyperclova_image_configured": "unknown",
             "kanana_base_url": "unknown",
             "midm_base_url": "unknown",
             "local_image_endpoint": "unknown",

@@ -36,12 +36,27 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-def _float_env(name: str, default: float) -> float:
-    """환경 변수 값을 실수로 읽고 실패하면 기본값을 반환한다."""
+def _float_env(
+    name: str,
+    default: float,
+    *,
+    lo: float | None = None,
+    hi: float | None = None,
+) -> float:
+    """환경 변수 값을 실수로 읽고 실패하면 기본값을 반환한다.
+
+    lo/hi를 주면 그 범위로 클램프한다 — env 오타(denoise=9 등)가 KSampler까지
+    그대로 흘러가 job이 원인 안내 없이 실패하는 것을 막는다(QA 2026-06-10 #3).
+    """
     try:
-        return float(os.getenv(name, str(default)))
+        value = float(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
+    if lo is not None:
+        value = max(lo, value)
+    if hi is not None:
+        value = min(hi, value)
+    return value
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -75,6 +90,13 @@ class Settings:
     hyperclova_model: str = os.getenv("HYPERCLOVA_MODEL", "")
     hyperclova_use_direct: bool = _bool_env("HYPERCLOVA_USE_DIRECT_API", False)
     hyperclova_apigw_key: str = os.getenv("HYPERCLOVA_APIGW_KEY", "")
+    hyperclova_vision_base_url: str = os.getenv("HYPERCLOVA_VISION_BASE_URL", "")
+    hyperclova_vision_api_key: str = os.getenv("HYPERCLOVA_VISION_API_KEY", "")
+    hyperclova_vision_model: str = os.getenv("HYPERCLOVA_VISION_MODEL", "")
+    hyperclova_image_base_url: str = os.getenv("HYPERCLOVA_IMAGE_BASE_URL", "")
+    hyperclova_image_api_key: str = os.getenv("HYPERCLOVA_IMAGE_API_KEY", "")
+    hyperclova_image_model: str = os.getenv("HYPERCLOVA_IMAGE_MODEL", "")
+    hyperclova_image_mode: str = os.getenv("HYPERCLOVA_IMAGE_MODE", "omniserve_chat")
     kanana_base_url: str = os.getenv("KANANA_BASE_URL", "")
     kanana_api_key: str = os.getenv("KANANA_API_KEY", "")
     kanana_model: str = os.getenv("KANANA_MODEL", "")
@@ -95,11 +117,11 @@ class Settings:
     # img2img 워크플로(flux_img2img)에서 선택 도면을 latent로 인코딩한 뒤 적용할 denoise.
     # 1.0이면 도면을 무시(text-to-image와 동일), 0에 가까울수록 도면 원형을 강하게 유지.
     # 0.6~0.7이 "도면 구조는 따르되 광고 톤으로 재생성" 균형(schnell cfg=1 기준).
-    comfyui_img2img_denoise: float = _float_env("COMFYUI_IMG2IMG_DENOISE", 0.65)
+    comfyui_img2img_denoise: float = _float_env("COMFYUI_IMG2IMG_DENOISE", 0.65, lo=0.0, hi=1.0)
     # 셋업 구도 맵(평면 색블록)은 라인아트 도면보다 디테일이 없어 낮은 denoise면 도식
     # 그대로 남는다 → 사실감을 얻으려면 높은 denoise가 필요(라이브 검증: 0.90이 구도
     # 유지+사진화 균형, schnell 4스텝). 도면 레퍼런스(0.65)와 분리해 회귀를 막는다.
-    comfyui_composition_denoise: float = _float_env("COMFYUI_COMPOSITION_DENOISE", 0.90)
+    comfyui_composition_denoise: float = _float_env("COMFYUI_COMPOSITION_DENOISE", 0.90, lo=0.0, hi=1.0)
     flux_model_variant: str = os.getenv("FLUX_MODEL_VARIANT", "")
     image_quantization: str = os.getenv("IMAGE_QUANTIZATION", "")
     enable_vae_tiling: bool = _bool_env("ENABLE_VAE_TILING", False)
@@ -141,6 +163,41 @@ class Settings:
     @property
     def has_hyperclova_direct(self) -> bool:
         return bool(self.hyperclova_use_direct and self.hyperclova_base_url and self.hyperclova_api_key)
+
+    @property
+    def effective_hyperclova_vision_base_url(self) -> str:
+        return self.hyperclova_vision_base_url or self.hyperclova_image_base_url
+
+    @property
+    def effective_hyperclova_vision_api_key(self) -> str:
+        return self.hyperclova_vision_api_key or self.hyperclova_image_api_key
+
+    @property
+    def effective_hyperclova_vision_model(self) -> str:
+        return self.hyperclova_vision_model or self.hyperclova_image_model
+
+    @property
+    def has_hyperclova_vision(self) -> bool:
+        return bool(self.effective_hyperclova_vision_base_url and self.effective_hyperclova_vision_model)
+
+    @property
+    def effective_hyperclova_image_base_url(self) -> str:
+        return self.hyperclova_image_base_url
+
+    @property
+    def effective_hyperclova_image_api_key(self) -> str:
+        return self.hyperclova_image_api_key
+
+    @property
+    def effective_hyperclova_image_model(self) -> str:
+        return self.hyperclova_image_model
+
+    @property
+    def has_hyperclova_image(self) -> bool:
+        mode = self.hyperclova_image_mode.strip().lower()
+        if mode in {"", "disabled", "off", "false"}:
+            return False
+        return bool(self.effective_hyperclova_image_base_url and self.effective_hyperclova_image_model)
 
     @property
     def has_kanana(self) -> bool:
@@ -190,6 +247,15 @@ def redacted_settings() -> dict:
         "hyperclova_model": settings.hyperclova_model or "default",
         "hyperclova_use_direct": settings.hyperclova_use_direct,
         "hyperclova_apigw_key": mask_value(settings.hyperclova_apigw_key),
+        "hyperclova_vision_base_url": "set" if settings.effective_hyperclova_vision_base_url else "missing",
+        "hyperclova_vision_api_key": mask_value(settings.effective_hyperclova_vision_api_key),
+        "hyperclova_vision_model": settings.effective_hyperclova_vision_model or "default",
+        "hyperclova_vision_configured": settings.has_hyperclova_vision,
+        "hyperclova_image_base_url": "set" if settings.effective_hyperclova_image_base_url else "missing",
+        "hyperclova_image_api_key": mask_value(settings.effective_hyperclova_image_api_key),
+        "hyperclova_image_model": settings.effective_hyperclova_image_model or "default",
+        "hyperclova_image_mode": settings.hyperclova_image_mode,
+        "hyperclova_image_configured": settings.has_hyperclova_image,
         "kanana_base_url": "set" if settings.kanana_base_url else "missing",
         "kanana_api_key": mask_value(settings.kanana_api_key),
         "kanana_model": settings.kanana_model or "default",

@@ -6,12 +6,14 @@ from collections.abc import Callable
 
 from .ad_content import (
     generate_copy_experiment,
+    generate_copy_variants,
     generate_image_job,
     generate_poster,
     poster_waiting_for_image,
     render_copy_experiment_picker,
 )
 from .api_client import (
+    activate_engine_track,
     fetch_ai_providers,
     fetch_desk_assets,
     fetch_layout_ids,
@@ -67,9 +69,11 @@ def build_step_ui_context(sync_layout_from_model: Callable[[], None]) -> dict:
         "render_poster_template_thumbnails": render_poster_template_thumbnails,
         "fetch_security_config": fetch_security_config,
         "generate_copy_experiment": generate_copy_experiment,
+        "generate_copy_variants": generate_copy_variants,
         "generate_image_job": generate_image_job,
         "poster_waiting_for_image": poster_waiting_for_image,
         "generate_poster": generate_poster,
         "fetch_ai_providers": fetch_ai_providers,
+        "activate_engine_track": activate_engine_track,
         "render_copy_experiment_picker": render_copy_experiment_picker,
     }

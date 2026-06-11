@@ -56,3 +56,29 @@ def test_hashtags_keep_korean_english_and_numbers_only():
     )
 
     assert output["hashtags"] == ["#DeskSetup", "#키보드65", "#desk_set"]
+
+
+# ── 2026-06-11 QA: 광고 규제 우회 2건 ─────────────────────────────────────────
+def test_hashtags_pass_through_forbidden_term_replacement():
+    output = apply_copy_policy(
+        {"target_channel": "인스타그램"},
+        _copy_result(hashtags=["#최고", "#국내1위키보드", "#키보드"]),
+    )
+    assert "#최고" not in output["hashtags"]
+    assert "#국내1위키보드" not in output["hashtags"]
+    assert "#뛰어난" in output["hashtags"]
+    assert "#많이찾는키보드" in output["hashtags"]
+    assert "최고" in output["policy"]["flagged_terms"]
+    assert "국내 1위" in output["policy"]["flagged_terms"]
+
+
+def test_single_word_term_with_inner_spaces_is_replaced():
+    output = apply_copy_policy(
+        {"target_channel": "인스타그램"},
+        _copy_result(copies=["최 고 의 타건감", "완 벽 한 마감"]),
+    )
+    joined = " | ".join(output["copies"])
+    assert "최 고" not in joined
+    assert "완 벽" not in joined
+    assert "뛰어난" in joined
+    assert "완성도 높은" in joined

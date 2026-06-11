@@ -14,6 +14,7 @@ from .ai import (
     create_image_job,
     generate_ad_copy,
     generate_copy_experiment,
+    generate_copy_variants,
     generate_image_reference as generate_ai_image_reference,
     image_reference_from_job,
     poll_image_job,
@@ -42,7 +43,9 @@ from .library import (
 from .plates import get_plate
 from .renderer import build_desk_setup_scene_glb, build_keyboard_scene_glb
 from .routes import register_routes
+from .runtime_workers import activate_track
 from .schemas import (
+    ActivateTrackRequest,
     AdContentRequest,
     CopyExperimentRequest,
     DeskSetupRenderRequest,
@@ -301,6 +304,16 @@ def list_ai_providers():
     return available_text_providers()
 
 
+@app.post("/ai/activate_track")
+def activate_generation_track(request: ActivateTrackRequest):
+    """트랙(생성 엔진) 선택 시점에 해당 GPU 워커를 백그라운드로 워밍업한다.
+
+    단일 GPU exclusive 모드에서 트랙 전환 리로드(~75s)를 사용자가 이미지/카피
+    생성을 누르기 전에 미리 시작해 체감 대기를 줄인다. 논블로킹으로 즉시 반환.
+    """
+    return activate_track(request.track)
+
+
 @app.post("/ai/copy")
 def generate_copy(request: AdContentRequest, force_regen: bool = False):
     """광고 문구 생성 요청을 AI 계층으로 전달하고 결과를 반환한다.
@@ -314,6 +327,12 @@ def generate_copy(request: AdContentRequest, force_regen: bool = False):
 def run_copy_experiment(request: CopyExperimentRequest, force_regen: bool = False):
     payload = request.model_dump(exclude={"providers"})
     return generate_copy_experiment(payload, request.providers, force_regen=force_regen)
+
+
+@app.post("/ai/copy/variants")
+def run_copy_variants(request: AdContentRequest, n: int = 4, force_regen: bool = False):
+    """Generate N copy variants from the selected engine (payload.engine) for selection."""
+    return generate_copy_variants(request.model_dump(), n=n, force_regen=force_regen)
 
 
 @app.post("/ai/image")

@@ -2092,24 +2092,51 @@ def build_setup_composition_raster(
             quad([fbl, fbr, ftr, ftl], front_rgb or _shade(base, 0.84), outline=edge)  # 앞면
             quad([btl, btr, ftr, ftl], _shade(base, 1.06), outline=edge)  # 윗면
 
-        # 객체를 뒤→앞(painter's) 순으로. 모니터는 별도(키 큰 화면)로 처리.
-        items = [b for b in boxes if not _comp_canon(b[4]) == "monitor"]
-        items.sort(key=lambda b: (b[1] + b[3]) / 2)
-        for x0, z0, x1, z1, label in items:
+        def draw_mouse_details(
+            x0: float, z0: float, x1: float, z1: float, y1: float, base: tuple[int, int, int]
+        ) -> None:
+            top = [project(x0, z0, y1), project(x1, z0, y1), project(x1, z1, y1), project(x0, z1, y1)]
+            edge = _shade(base, 0.38)
+            top_fill = _shade(base, 1.14)
+            quad(top, top_fill, outline=edge, width=2)
+            mid_x = (x0 + x1) / 2
+            seam0 = project(mid_x, z0 + (z1 - z0) * 0.12, y1 + 0.08)
+            seam1 = project(mid_x, z1 - (z1 - z0) * 0.14, y1 + 0.08)
+            dr.line([seam0, seam1], fill=edge, width=max(1, int(2 * px)))
+            split_l = project(x0 + (x1 - x0) * 0.18, z0 + (z1 - z0) * 0.34, y1 + 0.08)
+            split_r = project(x1 - (x1 - x0) * 0.18, z0 + (z1 - z0) * 0.34, y1 + 0.08)
+            dr.line([split_l, split_r], fill=edge, width=max(1, int(2 * px)))
+            wheel = project(mid_x, z0 + (z1 - z0) * 0.24, y1 + 0.18)
+            wr = max(2.0, 4.0 * px)
+            dr.ellipse([wheel[0] - wr, wheel[1] - wr, wheel[0] + wr, wheel[1] + wr], fill=_shade(base, 0.25))
+
+        # 객체를 뒤→앞(painter's) 순으로. 모니터(스탠드+키 큰 화면)도 같은 깊이 정렬에
+        # 끼워 넣는다 — 모니터를 항상 마지막에 그리면 모니터보다 앞쪽(z 큰) 식물·램프가
+        # 모니터 뒤로 가려져 깊이 관계가 반대로 표현된다(QA 2026-06-10 §10).
+        draws: list[tuple[float, int, str, tuple, dict]] = []
+        for x0, z0, x1, z1, label in boxes:
             canon = _comp_canon(label)
+            if canon == "monitor":
+                continue
             height, base_hex = _COMP_OBJECTS.get(canon, _COMP_DEFAULT)
             override = colors.get(canon)
             base_rgb = _hex_rgb(override) if override else _hex_rgb(base_hex)
-            draw_box(x0, z0, x1, z1, 0.0, height, base_rgb)
-
-        # 모니터: 스탠드 + 키 큰 화면(앞면 글로우)으로 뒤쪽에 세운다.
+            draws.append(((z0 + z1) / 2, len(draws), canon, (x0, z0, x1, z1, 0.0, height, base_rgb), {}))
         if monitor:
             mcx = monitor["center_x"]
             mcz = monitor["center_z"]
             pw, ph = monitor["panel_w"], monitor["panel_h"]
             neutral = _hex_rgb("#22252b")
-            draw_box(mcx - 4, mcz - 1.5, mcx + 4, mcz + 1.5, 0.0, 11.0, neutral)  # 스탠드
-            draw_box(mcx - pw / 2, mcz - 2.0, mcx + pw / 2, mcz + 2.0, 11.0, 11.0 + ph, neutral, front_rgb=screen_rgb)
+            draws.append((mcz, len(draws), "monitor_stand", (mcx - 4, mcz - 1.5, mcx + 4, mcz + 1.5, 0.0, 11.0, neutral), {}))  # 스탠드
+            draws.append(
+                (mcz, len(draws), "monitor_panel", (mcx - pw / 2, mcz - 2.0, mcx + pw / 2, mcz + 2.0, 11.0, 11.0 + ph, neutral), {"front_rgb": screen_rgb})
+            )
+        draws.sort(key=lambda item: (item[0], item[1]))
+        for _, _, canon, args, kwargs in draws:
+            draw_box(*args, **kwargs)
+            if canon == "mouse":
+                x0, z0, x1, z1, _y0, y1, base_rgb = args
+                draw_mouse_details(x0, z0, x1, z1, y1, base_rgb)
 
         out = io.BytesIO()
         img.save(out, format="PNG")
@@ -2142,6 +2169,25 @@ def _composition_top_down(
         p0, p1 = td(x0, z0), td(x1, z1)
         dr.rectangle([p0[0], p0[1], p1[0], p1[1]], fill=fill, outline=outline, width=width)
 
+    def mouse_footprint(x0: float, z0: float, x1: float, z1: float, fill, outline=None, width=2) -> None:
+        p0, p1 = td(x0, z0), td(x1, z1)
+        bbox = [p0[0], p0[1], p1[0], p1[1]]
+        dr.ellipse(bbox, fill=fill, outline=outline, width=width)
+        cx = (p0[0] + p1[0]) / 2
+        y0 = p0[1] + (p1[1] - p0[1]) * 0.12
+        y1 = p1[1] - (p1[1] - p0[1]) * 0.13
+        edge = outline or _shade(fill, 0.45)
+        dr.line([(cx, y0), (cx, y1)], fill=edge, width=width)
+        split_y = p0[1] + (p1[1] - p0[1]) * 0.35
+        dr.line(
+            [(p0[0] + (p1[0] - p0[0]) * 0.2, split_y), (p1[0] - (p1[0] - p0[0]) * 0.2, split_y)],
+            fill=edge,
+            width=width,
+        )
+        wr = max(2.0, min(p1[0] - p0[0], p1[1] - p0[1]) * 0.12)
+        wy = p0[1] + (p1[1] - p0[1]) * 0.23
+        dr.ellipse([cx - wr, wy - wr, cx + wr, wy + wr], fill=_shade(fill, 0.25))
+
     desk_rgb = _hex_rgb(colors.get("desk", "#6b4f34"))
     rect(-dw / 2, -dd / 2, dw / 2, dd / 2, _shade(desk_rgb, 0.95), _shade(desk_rgb, 0.68), 3)
     if deskmat:
@@ -2156,6 +2202,9 @@ def _composition_top_down(
         _, base_hex = _COMP_OBJECTS.get(canon, _COMP_DEFAULT)
         override = colors.get(canon)
         rgb = _hex_rgb(override) if override else _hex_rgb(base_hex)
+        if canon == "mouse":
+            mouse_footprint(x0, z0, x1, z1, rgb, _shade(rgb, 0.45), 2)
+            continue
         rect(x0, z0, x1, z1, rgb, _shade(rgb, 0.55), 2)
 
     if monitor:

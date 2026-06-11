@@ -17,11 +17,31 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
 
 _BACKEND_BASE_DIR = Path(__file__).resolve().parent.parent
+
+# 다중 접속 시 put/put·put/prune이 같은 파일/디렉터리를 두고 경쟁한다(2026-06-11 QA).
+# 쓰기·prune은 프로세스 내 락으로 직렬화하고, 파일 자체는 tmp→os.replace 원자 교체로
+# 독자가 절대 부분 쓰기를 읽지 않게 한다(읽기는 락 불필요).
+_CACHE_WRITE_LOCK = threading.Lock()
+
+
+def _atomic_write_json(path: Path, obj: dict) -> None:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.chmod(0o600)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def _cache_root() -> Path:
@@ -114,10 +134,11 @@ def _safe_unlink(path: str) -> int:
 def prune_caches() -> dict:
     """Prune both text and image caches; returns removed counts per directory."""
     max_entries, max_age = _max_entries(), _max_age_seconds()
-    return {
-        "text": _prune_dir(_text_cache_dir(), max_entries=max_entries, max_age_seconds=max_age),
-        "image": _prune_dir(_image_cache_dir(), max_entries=max_entries, max_age_seconds=max_age),
-    }
+    with _CACHE_WRITE_LOCK:
+        return {
+            "text": _prune_dir(_text_cache_dir(), max_entries=max_entries, max_age_seconds=max_age),
+            "image": _prune_dir(_image_cache_dir(), max_entries=max_entries, max_age_seconds=max_age),
+        }
 
 
 def _workflow_content_hash(workflow_path_value: str) -> str:
@@ -186,6 +207,10 @@ def make_image_cache_key(
     layout·case/keycap/accent 색상은 build_image_prompt가 image_prompt 문자열에
     그대로 녹여 넣으므로(배열/색이 바뀌면 prompt가 바뀜) 이 키가 이미 그 변화를
     반영한다 — 별도 필드로 중복 추가하지 않는다(make_text_cache_key와 대비).
+
+    img2img 레퍼런스(init latent로 들어가는 실제 픽셀)·denoise는 prompt에 안 녹으므로
+    키에 직접 넣는다 — 프롬프트·비율이 같아도 책상 배치가 다르면 다른 캐시 항목이어야
+    한다(QA 2026-06-10 #2).
     """
     model_config = json.dumps(
         {
@@ -197,12 +222,27 @@ def make_image_cache_key(
         },
         sort_keys=True,
     )
+    reference_blob = "|".join(
+        str(payload.get(key) or "")
+        for key in ("reference_image_b64", "reference_image_topdown_b64", "reference_asset_path")
+    )
     normalized = {
         "image_prompt": image_prompt,
         "workflow_hash": _workflow_content_hash(workflow_path),
         "width": width,
         "height": height,
         "model_config": model_config,
+        "reference_hash": (
+            hashlib.sha256(reference_blob.encode("utf-8")).hexdigest()[:16]
+            if reference_blob.strip("|")
+            else ""
+        ),
+        "reference_is_composition": bool(payload.get("reference_is_composition")),
+        "shot_type": str(payload.get("shot_type") or ""),
+        "denoise": [
+            os.getenv("COMFYUI_IMG2IMG_DENOISE", ""),
+            os.getenv("COMFYUI_COMPOSITION_DENOISE", ""),
+        ],
     }
     blob = json.dumps(normalized, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
@@ -227,14 +267,13 @@ def get_text_cache(cache_key: str) -> dict | None:
 
 def put_text_cache(cache_key: str, result: dict) -> None:
     """Write ad copy result to disk cache (failures are silently ignored)."""
-    try:
-        _text_cache_dir().mkdir(parents=True, exist_ok=True)
-        path = _text_cache_dir() / f"{cache_key}.json"
-        path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-        path.chmod(0o600)
-    except Exception:
-        pass
-    _prune_dir(_text_cache_dir(), max_entries=_max_entries(), max_age_seconds=_max_age_seconds())
+    with _CACHE_WRITE_LOCK:
+        try:
+            _text_cache_dir().mkdir(parents=True, exist_ok=True)
+            _atomic_write_json(_text_cache_dir() / f"{cache_key}.json", result)
+        except Exception:
+            pass
+        _prune_dir(_text_cache_dir(), max_entries=_max_entries(), max_age_seconds=_max_age_seconds())
 
 
 def get_image_cache(cache_key: str) -> dict | None:
@@ -256,12 +295,11 @@ def get_image_cache(cache_key: str) -> dict | None:
 
 def put_image_cache(cache_key: str, job: dict) -> None:
     """Write image job metadata to disk cache (image_b64 bytes are excluded)."""
-    try:
-        _image_cache_dir().mkdir(parents=True, exist_ok=True)
-        path = _image_cache_dir() / f"{cache_key}.json"
-        safe = {k: v for k, v in job.items() if k not in ("image_b64", "image_b64s")}
-        path.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
-        path.chmod(0o600)
-    except Exception:
-        pass
-    _prune_dir(_image_cache_dir(), max_entries=_max_entries(), max_age_seconds=_max_age_seconds())
+    with _CACHE_WRITE_LOCK:
+        try:
+            _image_cache_dir().mkdir(parents=True, exist_ok=True)
+            safe = {k: v for k, v in job.items() if k not in ("image_b64", "image_b64s")}
+            _atomic_write_json(_image_cache_dir() / f"{cache_key}.json", safe)
+        except Exception:
+            pass
+        _prune_dir(_image_cache_dir(), max_entries=_max_entries(), max_age_seconds=_max_age_seconds())

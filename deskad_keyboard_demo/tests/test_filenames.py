@@ -7,8 +7,13 @@ from backend.filenames import product_slug, timestamped_model_filename
 
 def test_product_slug_keeps_safe_ascii_product_tokens():
     assert product_slug("Neo65 Custom Keyboard") == "neo65_custom_keyboard"
-    assert product_slug("크림 베이지 65% 커스텀 키보드") == "65"
-    assert product_slug("크림 키보드", fallback="desk_setup") == "desk_setup"
+
+
+def test_product_slug_preserves_korean_product_names():
+    # 한글이 소실되면 한국 셀러가 생성 모델 파일을 제품명으로 식별할 수 없다(QA 06-05).
+    assert product_slug("크림 베이지 65% 커스텀 키보드") == "크림_베이지_65_커스텀_키보드"
+    assert product_slug("../../etc/passwd") == "etc_passwd"
+    assert product_slug("!!!", fallback="desk_setup") == "desk_setup"
 
 
 def test_timestamped_model_filename_orders_date_time_then_product():

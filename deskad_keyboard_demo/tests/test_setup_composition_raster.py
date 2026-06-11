@@ -89,6 +89,40 @@ def test_top_down_projection_renders_png():
         assert img.size == (512, 512)
 
 
+def test_top_down_mouse_marker_is_rounded_and_detailed():
+    raster = build_setup_composition_raster(
+        boxes=[(14.0, 1.0, 20.0, 11.0, "mouse")],
+        desk_width=140.0,
+        desk_depth=64.0,
+        colors={"desk": "#6b4f34", "mouse": "#b23b3b"},
+        projection="top_down",
+        size=512,
+    )
+    with Image.open(io.BytesIO(raster)).convert("RGB") as img:
+        S = 512
+        margin = 0.05 * S
+        desk_w_px = S - 2 * margin
+        desk_h_px = desk_w_px * (64.0 / 140.0)
+        x_off = (S - desk_w_px) / 2
+        y_off = (S - desk_h_px) / 2
+
+        def td(x: float, z: float) -> tuple[int, int]:
+            return (
+                round(x_off + (x + 70.0) / 140.0 * desk_w_px),
+                round(y_off + (z + 32.0) / 64.0 * desk_h_px),
+            )
+
+        x0, y0 = td(14.0, 1.0)
+        x1, y1 = td(20.0, 11.0)
+        body = img.getpixel((round(x0 + (x1 - x0) * 0.32), (y0 + y1) // 2))
+        corner = img.getpixel((x0 + 1, y0 + 1))
+        wheel = img.getpixel(((x0 + x1) // 2, round(y0 + (y1 - y0) * 0.23)))
+
+        assert body[0] > 120 and body[1] < 90 and body[2] < 90
+        assert corner[0] < 140  # rounded corner stays desk/outline, not filled mouse red
+        assert wheel[0] < body[0] and wheel[1] < body[1]
+
+
 # ── 채널 → 구도(shot_type) 해석 (투영 선택 근거) ──────────────────────────
 def test_resolve_shot_type_by_channel_and_override():
     assert ai._resolve_shot_type({"target_channel": "인스타그램"}) == "top_down"

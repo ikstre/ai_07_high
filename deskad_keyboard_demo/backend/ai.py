@@ -7,6 +7,7 @@ import json
 import os
 import re
 import textwrap
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
@@ -18,7 +19,12 @@ from .config import get_settings
 from .copy_policy import apply_copy_policy
 from .job_store import ImageJobStore
 from .library import reference_asset_descriptor, reference_asset_label
-from .llm_adapters import ChatCompletionAdapter, HyperClovaDirectAdapter, is_loopback_base_url
+from .llm_adapters import (
+    ChatCompletionAdapter,
+    HyperClovaDirectAdapter,
+    is_loopback_base_url,
+    normalize_chat_completions_url,
+)
 
 
 STYLE_COPY = {
@@ -194,6 +200,17 @@ def sanitize_user_text(value: object, *, limit: int = 400) -> str:
 
 def _flag_prompt_injection(*texts: str) -> bool:
     return any(_PROMPT_INJECTION_HINTS.search(text or "") for text in texts)
+
+
+# LLM 프롬프트에 그대로 흘러드는 자유텍스트 필드 전부 — selling_point/extra_request만
+# 검사하면 product_name("이전 지시 무시...") 같은 우회가 가능하다(2026-06-11 QA).
+# 차단이 아니라 flag-only인 것은 의도된 설계: 시스템 프롬프트 가드레일이 모델 측
+# 방어를 맡고, 이 플래그는 감사/추적용 메타데이터다.
+_INJECTION_CHECK_KEYS = ("product_name", "product_type", "target_customer", "selling_point", "extra_request")
+
+
+def _payload_injection_flagged(payload: dict) -> bool:
+    return _flag_prompt_injection(*(payload.get(key) for key in _INJECTION_CHECK_KEYS))
 
 
 def _stamp_injection_flag(result: dict, flagged: bool) -> dict:
@@ -673,6 +690,9 @@ _TEMPERATURE_BY_TONE = {
 
 
 def _copy_temperature(payload: dict) -> float:
+    override = payload.get("_copy_temperature_override")
+    if isinstance(override, (int, float)):
+        return max(0.0, min(2.0, float(override)))
     tone = sanitize_user_text(payload.get("ad_tone", "감성형"), limit=30)
     return _TEMPERATURE_BY_TONE.get(tone, 0.7)
 
@@ -696,6 +716,18 @@ def _reference_image_b64(payload: dict) -> str | None:
     return None
 
 
+def _vision_copy_reference_b64(payload: dict) -> str | None:
+    """카피 생성 vision 경로용 레퍼런스 이미지.
+
+    셋업 구도 맵(reference_is_composition)은 추상 색블록이라 제품 사진처럼 멀티모달
+    카피 입력에 넣으면 품질만 떨어뜨린다 → vision 경로에서는 제외하고 img2img
+    업로드 경로(_upload_reference_to_comfyui)에서만 쓴다(QA 2026-06-10 §10).
+    """
+    if payload.get("reference_is_composition"):
+        return None
+    return _reference_image_b64(payload)
+
+
 def _image_data_url(value: str) -> str:
     """raw base64면 data URL로 감싸고, 이미 data URL이면 그대로 둔다."""
     if value.startswith("data:"):
@@ -705,7 +737,7 @@ def _image_data_url(value: str) -> str:
 
 def _user_content_with_image(text: str, payload: dict) -> str | list[dict]:
     """비전 경로에서 OpenAI 멀티모달 content(text + image_url part)를 만든다."""
-    image = _reference_image_b64(payload)
+    image = _vision_copy_reference_b64(payload)
     if not image:
         return text
     return [
@@ -753,10 +785,10 @@ def _normalize_text_provider(provider: str) -> str:
 
 # 3개 평가 트랙(생성 엔진) → 텍스트 provider / 이미지 backend 매핑.
 #   openai      : OpenAI API (텍스트=OpenAI, 이미지=OpenAI Images)
-#   hyperclova  : HyperCLOVA (텍스트=HyperCLOVA, 이미지=ComfyUI FLUX)
+#   hyperclova  : HyperCLOVA (텍스트=HyperCLOVA, 이미지=HyperCLOVA Omni/OpenAI 호환)
 #   local       : 로컬 텍스트 모델 + ComfyUI (텍스트=local, 이미지=ComfyUI FLUX)
 ENGINE_TEXT_PROVIDER = {"openai": "openai", "hyperclova": "hyperclova", "local": "local"}
-ENGINE_IMAGE_BACKEND = {"openai": "openai", "hyperclova": "comfyui", "local": "comfyui"}
+ENGINE_IMAGE_BACKEND = {"openai": "openai", "hyperclova": "hyperclova", "local": "comfyui"}
 # OpenAI 모델 등급(일반/고성능) → 모델 ID. OPENAI_TEXT_MODEL_<TIER> / OPENAI_IMAGE_MODEL_<TIER> env로 재정의 가능.
 OPENAI_TEXT_MODEL_BY_TIER = {"general": "gpt-5.4-mini", "performance": "gpt-5.4"}
 OPENAI_IMAGE_MODEL_BY_TIER = {"general": "gpt-image-1-mini", "performance": "gpt-image-2"}
@@ -782,15 +814,27 @@ def _engine_model_tier(payload: dict) -> str:
 
 
 def _openai_text_model(payload: dict) -> str:
+    # 우선순위는 이미지 경로(_openai_image_model)와 동일: tier별 env > 공통 env > tier 기본값.
+    # settings.openai_text_model은 Settings 기본값("gpt-4o-mini")이 항상 차 있어 쓰면
+    # tier 기본값이 죽으므로, 운영자가 실제로 설정한 env만 os.getenv로 직접 본다
+    # (QA 2026-06-10 #4: 하드코딩 tier 모델이 OPENAI_TEXT_MODEL env를 무시하던 결함).
     tier = _engine_model_tier(payload)
-    env_override = os.getenv(f"OPENAI_TEXT_MODEL_{tier.upper()}", "").strip()
-    return env_override or OPENAI_TEXT_MODEL_BY_TIER.get(tier) or get_settings().openai_text_model or "gpt-5.4-mini"
+    env_override = (
+        os.getenv(f"OPENAI_TEXT_MODEL_{tier.upper()}", "").strip()
+        or os.getenv("OPENAI_TEXT_MODEL", "").strip()
+    )
+    return env_override or OPENAI_TEXT_MODEL_BY_TIER.get(tier) or "gpt-5.4-mini"
 
 
 def _openai_image_model(payload: dict) -> str:
     tier = _engine_model_tier(payload)
     env_override = os.getenv(f"OPENAI_IMAGE_MODEL_{tier.upper()}", "").strip()
     return env_override or get_settings().openai_image_model or OPENAI_IMAGE_MODEL_BY_TIER.get(tier) or "gpt-image-1-mini"
+
+
+def _hyperclova_image_model() -> str:
+    settings = get_settings()
+    return settings.effective_hyperclova_image_model or "track_b_model"
 
 
 def _copy_adapter(name: str, payload: dict | None = None) -> ChatCompletionAdapter | HyperClovaDirectAdapter:
@@ -818,6 +862,20 @@ def _copy_adapter(name: str, payload: dict | None = None) -> ChatCompletionAdapt
                 default_model="HCX-005",
             )
         return ChatCompletionAdapter(
+            name="hyperclova_x_vision",
+            base_url=settings.effective_hyperclova_vision_base_url,
+            model=settings.effective_hyperclova_vision_model,
+            api_key=settings.effective_hyperclova_vision_api_key,
+            default_model="HCX-005",
+            require_api_key=not is_loopback_base_url(settings.effective_hyperclova_vision_base_url),
+            json_response_format=False,
+            supports_vision=True,
+        ) if (
+            payload is not None
+            and _env_bool("HYPERCLOVA_SUPPORTS_VISION", False)
+            and settings.has_hyperclova_vision
+            and _vision_copy_reference_b64(payload)
+        ) else ChatCompletionAdapter(
             name="hyperclova_x",
             base_url=settings.hyperclova_base_url,
             model=settings.hyperclova_model,
@@ -825,7 +883,7 @@ def _copy_adapter(name: str, payload: dict | None = None) -> ChatCompletionAdapt
             default_model="HCX-005",
             require_api_key=not is_loopback_base_url(settings.hyperclova_base_url),
             json_response_format=False,
-            supports_vision=_env_bool("HYPERCLOVA_SUPPORTS_VISION", False),
+            supports_vision=False,
         )
     if name == "kanana":
         return ChatCompletionAdapter(
@@ -907,7 +965,73 @@ def available_text_providers() -> dict:
             "prompt_format": "n/a",
         }
     )
-    return {"providers": providers, "auto_order": TEXT_PROVIDER_ORDER}
+    return {"providers": providers, "auto_order": TEXT_PROVIDER_ORDER, "tracks": generation_tracks()}
+
+
+def _provider_summary(provider_name: str, payload: dict | None = None) -> dict:
+    adapter = _copy_adapter(provider_name, payload)
+    return {
+        "id": _normalize_text_provider(provider_name),
+        "runtime_name": adapter.name,
+        "configured": adapter.available,
+        "model": adapter.model or adapter.default_model,
+    }
+
+
+def generation_tracks() -> list[dict]:
+    """Return the three user-facing generation tracks and their configured state.
+
+    Track policy:
+    - openai: OpenAI text + OpenAI Images API.
+    - hyperclova: HyperCLOVA text + explicit HyperCLOVA vision/image endpoints.
+      It never reuses the text-only Ollama slot for image input/output.
+    - local: non-OpenAI/non-HyperCLOVA text candidates + ComfyUI image worker.
+    """
+    settings = get_settings()
+    local_text_candidates = [
+        _provider_summary("local"),
+        _provider_summary("kanana"),
+        _provider_summary("midm"),
+    ]
+    openai_text = _provider_summary("openai")
+    hyperclova_text = _provider_summary("hyperclova")
+    return [
+        {
+            "id": "openai",
+            "label": "OpenAI API",
+            "text_provider": "openai",
+            "text_configured": openai_text["configured"],
+            "text_model": openai_text["model"],
+            "image_backend": "openai",
+            "image_configured": bool(settings.openai_api_key and _openai_image_model({})),
+            "image_model": _openai_image_model({}),
+        },
+        {
+            "id": "hyperclova",
+            "label": "HyperCLOVA",
+            "text_provider": "hyperclova",
+            "text_configured": hyperclova_text["configured"],
+            "text_model": hyperclova_text["model"],
+            "vision_configured": settings.has_hyperclova_vision,
+            "vision_model": settings.effective_hyperclova_vision_model or "",
+            "image_backend": "hyperclova",
+            "image_configured": settings.has_hyperclova_image,
+            "image_model": settings.effective_hyperclova_image_model or "",
+            "image_mode": settings.hyperclova_image_mode,
+        },
+        {
+            "id": "local",
+            "label": "Local text + ComfyUI",
+            "text_provider": "local",
+            "text_configured": any(item["configured"] for item in local_text_candidates),
+            "active_text_provider": "local",
+            "active_text_configured": local_text_candidates[0]["configured"],
+            "text_candidates": local_text_candidates,
+            "image_backend": "comfyui",
+            "image_configured": settings.has_comfyui,
+            "image_model": settings.flux_model_variant or "ComfyUI workflow",
+        },
+    ]
 
 
 def _env_int(name: str, default: int) -> int:
@@ -924,10 +1048,21 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _hyperclova_image_timeout_seconds() -> int:
+    """Timeout for native HyperCLOVA image calls.
+
+    Keep this independent from the generic AI_REQUEST_TIMEOUT_SECONDS. The text
+    timeout is intentionally high for local LLMs, but native image jobs should
+    terminate around the documented image budget unless explicitly overridden.
+    """
+    return max(1, _env_int("HYPERCLOVA_IMAGE_TIMEOUT_SECONDS", 420))
+
+
 def _copy_request_timeout(adapter: ChatCompletionAdapter | HyperClovaDirectAdapter) -> int:
     settings_timeout = get_settings().request_timeout_seconds
     provider_timeouts = {
         "hyperclova_x": "HYPERCLOVA_REQUEST_TIMEOUT_SECONDS",
+        "hyperclova_x_vision": "HYPERCLOVA_REQUEST_TIMEOUT_SECONDS",
         "hyperclova_x_direct": "HYPERCLOVA_REQUEST_TIMEOUT_SECONDS",
         "kanana": "KANANA_REQUEST_TIMEOUT_SECONDS",
         "midm": "MIDM_REQUEST_TIMEOUT_SECONDS",
@@ -939,7 +1074,7 @@ def _copy_request_timeout(adapter: ChatCompletionAdapter | HyperClovaDirectAdapt
 
 
 def _chat_copy(payload: dict, adapter: ChatCompletionAdapter | HyperClovaDirectAdapter) -> dict:
-    attach_image = bool(getattr(adapter, "supports_vision", False) and _reference_image_b64(payload))
+    attach_image = bool(getattr(adapter, "supports_vision", False) and _vision_copy_reference_b64(payload))
     content = adapter.request(
         system_prompt=_system_prompt(payload),
         user_prompt=_ad_context(payload),
@@ -962,15 +1097,13 @@ def _chat_copy(payload: dict, adapter: ChatCompletionAdapter | HyperClovaDirectA
 
 def generate_ad_copy(payload: dict, provider_override: str | None = None, *, force_regen: bool = False) -> dict:
     from .result_cache import get_text_cache, make_text_cache_key, put_text_cache
-    from .runtime_workers import ensure_text_worker, schedule_idle_reap
+    from .runtime_workers import ensure_hyperclova_vision_worker, ensure_text_worker, schedule_idle_reap
 
     settings = get_settings()
     provider = _normalize_text_provider(provider_override or _engine_text_provider(payload) or settings.ai_provider)
     errors: list[str] = []
-    # 자유텍스트(소구점 240·추가요청 400)에 인젝션 시도가 있었는지 프롬프트 진입 전 1회 판정.
-    injection_flagged = _flag_prompt_injection(
-        payload.get("selling_point"), payload.get("extra_request")
-    )
+    # 자유텍스트 필드에 인젝션 시도가 있었는지 프롬프트 진입 전 1회 판정(flag-only).
+    injection_flagged = _payload_injection_flagged(payload)
 
     if provider == "fallback":
         return _stamp_injection_flag(
@@ -991,7 +1124,16 @@ def generate_ad_copy(payload: dict, provider_override: str | None = None, *, for
             if cached is not None:
                 return _stamp_injection_flag(apply_copy_policy(payload, cached), injection_flagged)
 
-        ensure_text_worker(start_managed_worker=_uses_managed_text_worker(adapter))
+        uses_managed_text_worker = _uses_managed_text_worker(adapter)
+        uses_managed_hyperclova_vision_worker = (
+            adapter.name == "hyperclova_x_vision"
+            and is_loopback_base_url(adapter.base_url)
+        )
+        if uses_managed_hyperclova_vision_worker:
+            ensure_text_worker(start_managed_worker=False)
+            ensure_hyperclova_vision_worker()
+        else:
+            ensure_text_worker(start_managed_worker=uses_managed_text_worker)
         try:
             result = apply_copy_policy(payload, _chat_copy(payload, adapter))
             cache_key = make_text_cache_key(payload, provider_name, adapter.model or adapter.default_model)
@@ -1092,6 +1234,70 @@ def generate_copy_experiment(payload: dict, providers: list[str] | None = None, 
 
     schedule_idle_reap()
     return {"providers": available_text_providers()["providers"], "results": results}
+
+
+def generate_copy_variants(
+    payload: dict, provider: str | None = None, n: int = 4, *, force_regen: bool = False
+) -> dict:
+    """Generate N copy variants from a single engine (the selected track) for selection.
+
+    Unlike generate_copy_experiment (one copy per engine), this samples the SAME
+    selected engine N times at different temperatures so the user can pick among
+    distinct phrasings — mirroring how the local track is chosen by model output.
+    """
+    from .result_cache import get_text_cache, make_text_cache_key, put_text_cache
+    from .runtime_workers import ensure_text_worker, schedule_idle_reap
+
+    n = max(1, min(4, n))
+    provider_id = _normalize_text_provider(provider or _engine_text_provider(payload) or get_settings().ai_provider)
+    injection_flagged = _payload_injection_flagged(payload)
+    # Conservative spread: enough variation to differ, low enough to avoid degenerate
+    # high-temperature outputs on local GGUF models. The user picks among the results.
+    variant_temps = [0.5, 0.65, 0.8, 0.95]
+
+    if provider_id == "fallback":
+        copy = _stamp_injection_flag(
+            apply_copy_policy(payload, _complete_copy_payload(payload, _fallback_copy(payload))),
+            injection_flagged,
+        )
+        return {"provider": "fallback", "results": [
+            {"provider": "fallback", "variant": 0, "status": "ok", "runtime_name": "rule_based",
+             "model": "규칙 기반 (AI 미사용)", "copy": copy}
+        ]}
+
+    adapter = _copy_adapter(provider_id, payload)
+    if not adapter.available:
+        return {"provider": provider_id, "results": [
+            {"provider": provider_id, "variant": 0, "status": "not_configured",
+             "runtime_name": adapter.name, "model": adapter.model or adapter.default_model}
+        ]}
+
+    results: list[dict] = []
+    for i in range(n):
+        temp = variant_temps[i % len(variant_temps)]
+        cache_key = make_text_cache_key(payload, f"{provider_id}#v{i}", adapter.model or adapter.default_model)
+        if not force_regen:
+            cached = get_text_cache(cache_key)
+            if cached is not None:
+                results.append({"provider": provider_id, "variant": i, "status": "ok",
+                                "runtime_name": adapter.name, "model": adapter.model or adapter.default_model,
+                                "elapsed_ms": 0, "cache_hit": True, "copy": apply_copy_policy(payload, cached)})
+                continue
+        ensure_text_worker(start_managed_worker=_uses_managed_text_worker(adapter))
+        started = time.time()
+        try:
+            vpayload = {**payload, "_copy_temperature_override": temp}
+            result = apply_copy_policy(payload, _chat_copy(vpayload, adapter))
+            put_text_cache(cache_key, result)
+            results.append({"provider": provider_id, "variant": i, "status": "ok",
+                            "runtime_name": adapter.name, "model": adapter.model or adapter.default_model,
+                            "elapsed_ms": int((time.time() - started) * 1000), "temperature": temp,
+                            "copy": _stamp_injection_flag(result, injection_flagged)})
+        except Exception as exc:
+            results.append({"provider": provider_id, "variant": i, "status": "error",
+                            "elapsed_ms": int((time.time() - started) * 1000), "error": str(exc)})
+    schedule_idle_reap()
+    return {"provider": provider_id, "results": results}
 
 
 LAYOUT_PROMPT_LABELS = {
@@ -1399,6 +1605,41 @@ def _wrap(text: str, width: int, max_lines: int = 3) -> list[str]:
     return clipped
 
 
+def _wrap_px(text: str, *, font_size: int, max_px: int, max_lines: int) -> list[str]:
+    """픽셀 추정 폭(_estimate_svg_text_width) 기준 wrap — 단어 경계 우선, 글자 분할 폴백.
+
+    _wrap의 글자수 기준은 한/영 폭 차이를 무시해 SVG 카드처럼 픽셀 폭이 빠듯한
+    영역에서 넘침/과소사용이 생긴다(2026-06-11 QA: SPEC 카드). max_lines 초과분만
+    마지막 줄 말줄임 처리한다.
+    """
+    words = str(text or "").split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if _estimate_svg_text_width(candidate, font_size) <= max_px:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        # 한 단어가 한 줄보다 길면(공백 없는 한글 구문) 글자 단위로 쪼갠다.
+        while _estimate_svg_text_width(word, font_size) > max_px and len(word) > 1:
+            cut = len(word)
+            while cut > 1 and _estimate_svg_text_width(word[:cut], font_size) > max_px:
+                cut -= 1
+            lines.append(word[:cut])
+            word = word[cut:]
+        current = word
+    if current:
+        lines.append(current)
+    if not lines:
+        return [""]
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = _fit_svg_text(lines[-1] + "…", font_size=font_size, max_width=max_px)
+    return lines
+
+
 PALETTES = {
     "minimal": ("#f5f2ea", "#2f3438", "#8aa0a8", "#d8b892"),
     "pastel": ("#f8f0f3", "#334155", "#9bbbd4", "#e8c7b8"),
@@ -1678,13 +1919,35 @@ def _feature_focus_svg(payload: dict, copy_result: dict, image_b64: PosterImageI
         f'<text x="{pad}" y="{int(height*0.13) + i*42}" font-size="36" font-weight="800" fill="{ink}">{line}</text>'
         for i, line in enumerate(headline_lines)
     )
+    # SPEC 카드: 카드 픽셀 폭 기준 자동 줄바꿈 → 수직 공간 초과 시 폰트 자동 축소 →
+    # 그래도 안 들어가면 bullet당 3줄 말줄임(최후 수단). 기존엔 한 줄 고정이라
+    # ~12자 넘는 문구가 카드 밖으로 넘쳤다(2026-06-11 이미지 QA 1.md 高).
+    bullet_text_x = spec_x + 28
+    bullet_max_px = max(60, spec_w - 44)  # 점·좌우 여백 제외 실제 텍스트 폭
+    spec_avail_h = hero_h - 70 - 16       # 카드 높이 - SPECS 헤더 - 하단 여백
+    wrapped_bullets: list[list[str]] = []
+    bullet_font, line_h, bullet_gap = 22, 33, 18
+    for bullet_font in (22, 19, 17):
+        line_h = int(bullet_font * 1.5)
+        bullet_gap = int(bullet_font * 0.8)
+        wrapped_bullets = [
+            _wrap_px(bullet, font_size=bullet_font, max_px=bullet_max_px, max_lines=3)
+            for bullet in spec_bullets
+        ]
+        total_lines = sum(len(lines) for lines in wrapped_bullets)
+        if total_lines * line_h + max(0, len(wrapped_bullets) - 1) * bullet_gap <= spec_avail_h:
+            break
     bullets_svg = ""
-    for i, bullet in enumerate(spec_bullets):
-        line_y = spec_y + 70 + i * 58
-        bullets_svg += (
-            f'<circle cx="{spec_x + 10}" cy="{line_y - 8}" r="6" fill="{accent}"/>'
-            f'<text x="{spec_x + 28}" y="{line_y}" font-size="22" fill="{ink}">{html.escape(bullet)}</text>'
-        )
+    line_y = spec_y + 70
+    for lines in wrapped_bullets:
+        bullets_svg += f'<circle cx="{spec_x + 10}" cy="{line_y - 8}" r="6" fill="{accent}"/>'
+        for line in lines:
+            bullets_svg += (
+                f'<text x="{bullet_text_x}" y="{line_y}" font-size="{bullet_font}" fill="{ink}">'
+                f"{html.escape(line)}</text>"
+            )
+            line_y += line_h
+        line_y += bullet_gap
     cta_svg = _cta_button_svg(
         x=width - pad,
         y=int(height * 0.875),
@@ -1826,6 +2089,14 @@ def _decode_local_images_to_b64(result: dict, *, limit: int = 3) -> list[str]:
         return []
     images: list[str] = []
 
+    def download_url(value: str, timeout: int = 20) -> str | None:
+        try:
+            response = requests.get(value, timeout=timeout)
+            response.raise_for_status()
+            return base64.b64encode(response.content).decode("ascii")
+        except Exception:
+            return None
+
     def add_b64(value: object) -> None:
         if len(images) >= limit:
             return
@@ -1840,12 +2111,8 @@ def _decode_local_images_to_b64(result: dict, *, limit: int = 3) -> list[str]:
     def add_url(value: object) -> None:
         if len(images) >= limit or not isinstance(value, str) or not value:
             return
-        try:
-            response = requests.get(value, timeout=20)
-            response.raise_for_status()
-            images.append(base64.b64encode(response.content).decode("ascii"))
-        except Exception:
-            return
+        if image_b64 := download_url(value):
+            images.append(image_b64)
 
     for key in ("image_base64", "image_b64", "image"):
         add_b64(result.get(key))
@@ -1913,6 +2180,447 @@ def generate_local_image_reference(payload: dict, image_prompt: str) -> dict | N
         # Surface a compact summary of the response to help debug.
         summary["raw_keys"] = list(result.keys()) if isinstance(result, dict) else []
     return summary
+
+
+def _images_generations_url(base_url: str) -> str:
+    base = (base_url or "").rstrip("/")
+    if base.endswith("/images/generations"):
+        return base
+    path_segments = [segment for segment in urlparse(base).path.split("/") if segment]
+    if "v1" in path_segments:
+        return f"{base}/images/generations"
+    return f"{base}/v1/images/generations"
+
+
+def _auth_headers(api_key: str = "") -> dict:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _hyperclova_image_mode() -> str:
+    raw = get_settings().hyperclova_image_mode.strip().lower()
+    aliases = {
+        "openai": "openai_images",
+        "images": "openai_images",
+        "image": "openai_images",
+        "openai-compatible": "openai_images",
+        "omni": "omniserve_chat",
+        "chat": "omniserve_chat",
+        "tool": "omniserve_chat",
+    }
+    return aliases.get(raw, raw or "omniserve_chat")
+
+
+def _hyperclova_image_not_configured_reason() -> str | None:
+    settings = get_settings()
+    base_url = settings.effective_hyperclova_image_base_url
+    if not settings.has_hyperclova_image:
+        return (
+            "HyperCLOVA 이미지 출력은 텍스트용 HYPERCLOVA_BASE_URL/HYPERCLOVA_MODEL을 재사용하지 않습니다. "
+            "Omni/이미지 지원 서버를 별도로 띄우고 HYPERCLOVA_IMAGE_BASE_URL/HYPERCLOVA_IMAGE_MODEL을 설정해야 합니다."
+        )
+    if not is_loopback_base_url(base_url) and not settings.effective_hyperclova_image_api_key:
+        return "원격 HyperCLOVA 이미지 엔드포인트에는 HYPERCLOVA_IMAGE_API_KEY가 필요합니다."
+    return None
+
+
+def _hyperclova_native_image_prompt(payload: dict, image_prompt: str) -> str:
+    """Compact prompt for HyperCLOVA Omni native image-token generation.
+
+    The ComfyUI prompt is intentionally long and bracketed for diffusion workflow
+    control. HyperCLOVA Omni first has to emit discrete image tokens from an LLM;
+    very long structured prompts reduce the chance of producing a valid token
+    block. Keep the same product/composition signals, but send them as concise
+    natural-language art direction.
+    """
+    product = sanitize_user_text(payload.get("product_name", "custom keyboard setup"), limit=80)
+    layout = sanitize_user_text(payload.get("layout", "65"), limit=10)
+    layout_label = LAYOUT_PROMPT_LABELS.get(layout, f"{layout}% custom keyboard layout")
+    shot_type = _resolve_shot_type(payload)
+    comp = _COMPOSITION_TEMPLATES[shot_type]
+    tone = sanitize_user_text(payload.get("ad_tone", "감성형"), limit=30)
+    theme = sanitize_user_text(payload.get("theme", "minimal"), limit=20)
+    mood = _THEME_MOOD_EN.get(theme, f"{theme} styling")
+    lighting = _IMAGE_DIRECTION_BY_TONE.get(tone, _IMAGE_DIRECTION_BY_TONE["감성형"])
+    color_temp = _COLOR_TEMP_BY_TONE.get(tone, "standard 5500K daylight white balance")
+    ratio = sanitize_user_text(payload.get("image_ratio", "1:1"), limit=10)
+    extra = sanitize_user_text(payload.get("extra_request", ""), limit=140)
+    assets = [
+        str(asset).replace("_", " ")
+        for asset in payload.get("assets", [])
+        if asset and str(asset) not in {"keyboard", "desk"}
+    ][:4]
+    asset_clause = ", ".join(assets) if assets else "no extra accessories"
+    colors = ", ".join(
+        part
+        for part in (
+            f"case {describe_color(payload.get('case_color'))}",
+            f"keycaps {describe_color(payload.get('keycap_color'))}",
+            f"accent keycaps {describe_color(payload.get('accent_keycap_color'))}",
+        )
+        if part and "None" not in part
+    )
+    # describe_color는 "ivory off-white (#f5f0e6)"처럼 hex를 병기한다. Omni는
+    # prompt 속 문자열을 이미지에 그대로 echo하는 경향이 있어 hex 표기는 제거.
+    colors = re.sub(r"\s*\(#[0-9a-fA-F]{3,8}\)", "", colors)
+    prompt = (
+        f"Create one photorealistic Korean ecommerce product image of {product}, "
+        f"a {layout_label}. Camera: {comp['angle']}; {comp['framing']}; {comp['lens']}. "
+        f"Scene: tidy desk setup with exactly one keyboard, one desk, and {asset_clause}; do not duplicate accessories. "
+        f"Style: {mood}; {lighting}; {color_temp}; realistic materials and soft contact shadows. "
+        f"Colors: {colors or 'clean neutral keyboard colors'}. "
+        f"Aspect ratio: {ratio}. Keep a clean empty background area, and render no typography at all: "
+        "no captions, no labels, no title text, no letters, no numbers, no logos, and no watermarks. "
+        f"Use accurate mechanical keyboard proportions, aligned key rows, plain blank keycaps, and no distorted or melted keys."
+    )
+    if extra:
+        prompt += f" Art direction: {extra}."
+    return sanitize_user_text(prompt, limit=1400) or image_prompt[:1400]
+
+
+def _build_hyperclova_openai_images_payload(payload: dict, image_prompt: str) -> dict:
+    width, height = _image_dimensions(payload)
+    size = f"{width}x{height}" if width == height else "1024x1024"
+    return {
+        "model": _hyperclova_image_model(),
+        "prompt": _hyperclova_native_image_prompt(payload, image_prompt),
+        "size": size,
+        "n": _image_count_for_payload(payload),
+        "response_format": "b64_json",
+    }
+
+
+def _hyperclova_openai_images_reference(payload: dict, image_prompt: str) -> dict:
+    settings = get_settings()
+    model = _hyperclova_image_model()
+    request_payload = _build_hyperclova_openai_images_payload(payload, image_prompt)
+    try:
+        result = _request_json(
+            _images_generations_url(settings.effective_hyperclova_image_base_url),
+            headers=_auth_headers(settings.effective_hyperclova_image_api_key),
+            payload=request_payload,
+            timeout=_hyperclova_image_timeout_seconds(),
+        )
+    except requests.HTTPError as exc:
+        response_text = getattr(exc.response, "text", "") if getattr(exc, "response", None) is not None else ""
+        if "response_format" not in response_text:
+            return {
+                "provider": "hyperclova_image",
+                "mode": "openai_images",
+                "model": model,
+                "error": f"{exc}: {response_text[:700]}" if response_text else str(exc),
+                "has_image": False,
+            }
+        try:
+            request_payload.pop("response_format", None)
+            result = _request_json(
+                _images_generations_url(settings.effective_hyperclova_image_base_url),
+                headers=_auth_headers(settings.effective_hyperclova_image_api_key),
+                payload=request_payload,
+                timeout=_hyperclova_image_timeout_seconds(),
+            )
+        except Exception as retry_exc:
+            retry_response_text = (
+                getattr(retry_exc.response, "text", "")
+                if getattr(retry_exc, "response", None) is not None
+                else ""
+            )
+            return {
+                "provider": "hyperclova_image",
+                "mode": "openai_images",
+                "model": model,
+                "error": f"{retry_exc}: {retry_response_text[:700]}" if retry_response_text else str(retry_exc),
+                "has_image": False,
+            }
+    except Exception as exc:
+        return {
+            "provider": "hyperclova_image",
+            "mode": "openai_images",
+            "model": model,
+            "error": str(exc),
+            "has_image": False,
+        }
+
+    requested_count = _image_count_for_payload(payload)
+    image_b64s = _decode_local_images_to_b64(result, limit=requested_count)
+    summary: dict = {
+        "provider": "hyperclova_image",
+        "mode": "openai_images",
+        "model": model,
+        "has_image": bool(image_b64s),
+        "requested_image_count": requested_count,
+        "image_count": len(image_b64s),
+    }
+    if image_b64s:
+        summary["image_b64"] = image_b64s[0]
+        if len(image_b64s) > 1:
+            summary["image_b64s"] = image_b64s
+    else:
+        summary["raw_keys"] = list(result.keys()) if isinstance(result, dict) else []
+    return summary
+
+
+_HYPERCLOVA_T2I_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "t2i_model_generation",
+        "description": "Generates an RGB image based on the provided discrete image representation.",
+        "parameters": {
+            "type": "object",
+            "required": ["discrete_image_token"],
+            "properties": {
+                "discrete_image_token": {
+                    "type": "string",
+                    "description": (
+                        "Serialized discrete vision tokens or a generated image URL. "
+                        "The token may be decoded by the OmniServe vision decoder."
+                    ),
+                    "minLength": 1,
+                }
+            },
+        },
+    },
+}
+
+
+def _hyperclova_t2i_system_prompt() -> str:
+    return (
+        "You are an AI assistant that generates images. "
+        "When asked to draw or create an image, you MUST use the t2i_model_generation tool to generate the image. "
+        "Always respond by calling the tool."
+    )
+
+
+def _hyperclova_omni_chat_payload(payload: dict, image_prompt: str) -> dict:
+    return {
+        "model": _hyperclova_image_model(),
+        "messages": [
+            {"role": "system", "content": _hyperclova_t2i_system_prompt()},
+            {"role": "user", "content": _hyperclova_native_image_prompt(payload, image_prompt)},
+        ],
+        "tools": [_HYPERCLOVA_T2I_TOOL],
+        "max_tokens": _env_int("HYPERCLOVA_IMAGE_MAX_TOKENS", 7000),
+        "temperature": float(os.getenv("HYPERCLOVA_IMAGE_TEMPERATURE", "0.7")),
+        "chat_template_kwargs": {"skip_reasoning": True},
+    }
+
+
+def _json_object(value: object) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _download_image_url_to_b64(url: str, *, timeout: int = 30) -> str | None:
+    try:
+        response = requests.get(url, timeout=timeout)
+        response.raise_for_status()
+        return base64.b64encode(response.content).decode("ascii")
+    except Exception:
+        return None
+
+
+def _hyperclova_add_image_value(
+    value: object,
+    *,
+    b64s: list[str],
+    source_urls: list[str],
+    unresolved_tokens: list[str],
+    limit: int,
+    force_b64: bool = False,
+) -> None:
+    if len(b64s) >= limit:
+        return
+    if isinstance(value, list):
+        for item in value:
+            _hyperclova_add_image_value(
+                item,
+                b64s=b64s,
+                source_urls=source_urls,
+                unresolved_tokens=unresolved_tokens,
+                limit=limit,
+                force_b64=force_b64,
+            )
+            if len(b64s) >= limit:
+                break
+        return
+    if isinstance(value, dict):
+        for key in ("b64_json", "image_base64", "image_b64"):
+            _hyperclova_add_image_value(
+                value.get(key),
+                b64s=b64s,
+                source_urls=source_urls,
+                unresolved_tokens=unresolved_tokens,
+                limit=limit,
+                force_b64=True,
+            )
+        for key in ("discrete_image_token", "image", "url", "image_url", "images"):
+            _hyperclova_add_image_value(
+                value.get(key),
+                b64s=b64s,
+                source_urls=source_urls,
+                unresolved_tokens=unresolved_tokens,
+                limit=limit,
+            )
+        return
+    if not isinstance(value, str):
+        return
+    text = value.strip()
+    if not text:
+        return
+    if text.startswith("data:image"):
+        b64s.append(text.split(",", 1)[-1])
+        return
+    if force_b64:
+        b64s.append(text)
+        return
+    if text.startswith("http://") or text.startswith("https://"):
+        if image_b64 := _download_image_url_to_b64(text):
+            b64s.append(image_b64)
+            source_urls.append(text)
+        return
+    if text.startswith("s3://") or "discrete_image_start" in text:
+        unresolved_tokens.append(text[:180])
+
+
+def _hyperclova_omni_result_to_reference(result: dict, *, requested_count: int, model: str) -> dict:
+    b64s: list[str] = []
+    source_urls: list[str] = []
+    unresolved_tokens: list[str] = []
+
+    _hyperclova_add_image_value(
+        result,
+        b64s=b64s,
+        source_urls=source_urls,
+        unresolved_tokens=unresolved_tokens,
+        limit=requested_count,
+    )
+    for choice in result.get("choices", []) if isinstance(result, dict) else []:
+        message = choice.get("message") if isinstance(choice, dict) else None
+        if not isinstance(message, dict):
+            continue
+        _hyperclova_add_image_value(
+            message.get("image") or message.get("images"),
+            b64s=b64s,
+            source_urls=source_urls,
+            unresolved_tokens=unresolved_tokens,
+            limit=requested_count,
+        )
+        for tool_call in message.get("tool_calls") or []:
+            if not isinstance(tool_call, dict):
+                continue
+            arguments = _json_object((tool_call.get("function") or {}).get("arguments"))
+            _hyperclova_add_image_value(
+                arguments,
+                b64s=b64s,
+                source_urls=source_urls,
+                unresolved_tokens=unresolved_tokens,
+                limit=requested_count,
+            )
+
+    summary: dict = {
+        "provider": "hyperclova_image",
+        "mode": "omniserve_chat",
+        "model": model,
+        "has_image": bool(b64s),
+        "requested_image_count": requested_count,
+        "image_count": len(b64s),
+    }
+    if b64s:
+        summary["image_b64"] = b64s[0]
+        if len(b64s) > 1:
+            summary["image_b64s"] = b64s[:requested_count]
+    if source_urls:
+        summary["source_url"] = source_urls[0]
+        summary["source_urls"] = source_urls[:requested_count]
+    if unresolved_tokens and not b64s:
+        summary["pending_decoder"] = True
+        summary["error"] = (
+            "HyperCLOVA OmniServe returned unresolved vision tokens or s3:// output. "
+            "Check the OmniServe vision decoder and S3/public URL configuration."
+        )
+        summary["unresolved_preview"] = unresolved_tokens[0]
+    if not b64s and "error" not in summary:
+        summary["error"] = "HyperCLOVA OmniServe response did not include a downloadable image."
+        summary["raw_keys"] = list(result.keys()) if isinstance(result, dict) else []
+    return summary
+
+
+def _hyperclova_omni_chat_reference(payload: dict, image_prompt: str) -> dict:
+    settings = get_settings()
+    model = _hyperclova_image_model()
+    request_payload = _hyperclova_omni_chat_payload(payload, image_prompt)
+    attempts = max(1, _env_int("HYPERCLOVA_IMAGE_MAX_ATTEMPTS", 1))
+    last_summary: dict | None = None
+    for attempt in range(attempts):
+        try:
+            result = _request_json(
+                normalize_chat_completions_url(settings.effective_hyperclova_image_base_url),
+                headers=_auth_headers(settings.effective_hyperclova_image_api_key),
+                payload=request_payload,
+                timeout=_hyperclova_image_timeout_seconds(),
+            )
+        except Exception as exc:
+            return {
+                "provider": "hyperclova_image",
+                "mode": "omniserve_chat",
+                "model": model,
+                "error": str(exc),
+                "has_image": False,
+            }
+        summary = _hyperclova_omni_result_to_reference(
+            result,
+            requested_count=_image_count_for_payload(payload),
+            model=model,
+        )
+        if summary.get("has_image"):
+            return summary
+        last_summary = summary
+        if not summary.get("pending_decoder") or attempt >= attempts - 1:
+            break
+        time.sleep(max(0, _env_int("HYPERCLOVA_IMAGE_RETRY_DELAY_SECONDS", 2)))
+    return last_summary or {
+        "provider": "hyperclova_image",
+        "mode": "omniserve_chat",
+        "model": model,
+        "error": "HyperCLOVA image generation did not return a result.",
+        "has_image": False,
+    }
+
+
+def generate_hyperclova_image_reference(payload: dict, image_prompt: str) -> dict | None:
+    settings = get_settings()
+    model = _hyperclova_image_model()
+    if reason := _hyperclova_image_not_configured_reason():
+        return {
+            "provider": "hyperclova_image",
+            "mode": _hyperclova_image_mode(),
+            "model": model,
+            "error": reason,
+            "has_image": False,
+            "not_configured": True,
+        }
+    mode = _hyperclova_image_mode()
+    if mode == "openai_images":
+        return _hyperclova_openai_images_reference(payload, image_prompt)
+    if mode == "omniserve_chat":
+        return _hyperclova_omni_chat_reference(payload, image_prompt)
+    return {
+        "provider": "hyperclova_image",
+        "mode": mode,
+        "model": model,
+        "error": "HYPERCLOVA_IMAGE_MODE must be openai_images or omniserve_chat.",
+        "has_image": False,
+        "not_configured": True,
+    }
 
 
 def generate_openai_image_reference(payload: dict, image_prompt: str) -> dict | None:
@@ -2022,8 +2730,8 @@ def generate_openai_image_reference(payload: dict, image_prompt: str) -> dict | 
 
 def generate_image_reference(payload: dict, image_prompt: str) -> dict | None:
     settings = get_settings()
-    # 선택 엔진이 backend를 강제(openai→OpenAI, hyperclova/local→comfyui). comfyui는
-    # 비동기 job 경로 전용이라 이 동기 임베드 함수에서는 None을 반환(포스터가 이미지 없이 생성).
+    # 선택 엔진이 backend를 강제한다. comfyui는 비동기 job 경로 전용이라
+    # 이 동기 임베드 함수에서는 None을 반환(포스터가 이미지 없이 생성).
     backend = (_engine_image_backend(payload) or settings.image_model_backend).lower()
     errors: list[str] = []
 
@@ -2035,6 +2743,16 @@ def generate_image_reference(payload: dict, image_prompt: str) -> dict | None:
             errors.append(f"openai_image: {result['error']}")
             if backend == "openai":
                 return {**result, "error": "; ".join(errors)}
+
+    if backend == "hyperclova" or (backend == "auto" and settings.has_hyperclova_image):
+        result = generate_hyperclova_image_reference(payload, image_prompt)
+        if isinstance(result, dict) and result.get("has_image"):
+            return result
+        if isinstance(result, dict) and result.get("error"):
+            errors.append(f"hyperclova_image: {result['error']}")
+            return {**result, "error": "; ".join(errors)}
+        if result is not None:
+            return result
 
     if backend in {"local", "local_endpoint"} or (backend == "auto" and settings.has_local_image):
         result = generate_local_image_reference(payload, image_prompt)
@@ -2088,6 +2806,13 @@ def _image_backend_config() -> dict:
     return {
         "backend": settings.image_model_backend,
         "openai_image_model": "set" if settings.openai_image_model else "missing",
+        "hyperclova_image_base_url": "set" if settings.effective_hyperclova_image_base_url else "missing",
+        "hyperclova_image_model": settings.effective_hyperclova_image_model or "missing",
+        "hyperclova_image_mode": settings.hyperclova_image_mode,
+        "hyperclova_image_configured": settings.has_hyperclova_image,
+        "hyperclova_vision_base_url": "set" if settings.effective_hyperclova_vision_base_url else "missing",
+        "hyperclova_vision_model": settings.effective_hyperclova_vision_model or "missing",
+        "hyperclova_vision_configured": settings.has_hyperclova_vision,
         "local_image_endpoint": "set" if settings.local_image_endpoint else "missing",
         "comfyui_base_url": "set" if settings.comfyui_base_url else "missing",
         "comfyui_workflow_path": "set" if settings.comfyui_workflow_path else "missing",
@@ -2145,6 +2870,11 @@ def _candidate_workflow_names(payload: dict) -> list[str]:
     explicit = _safe_workflow_name(payload.get("image_workflow"))
     if explicit:
         names.append(explicit)
+    # 레퍼런스 이미지(셋업 구도 맵·선택 도면)가 있으면 img2img를 situational/default보다
+    # 선행 후보로 넣는다. txt2img 계열이 먼저 잡히면 {reference_image_name} 치환이
+    # 일어나지 않아 레퍼런스가 통째로 무시된다(QA 2026-06-10 #1).
+    if _reference_image_b64(payload):
+        names.append("flux_img2img")
     for key in ("template", "poster_template", "theme"):
         situ = _safe_workflow_name(payload.get(key))
         if situ:
@@ -2399,13 +3129,35 @@ def _submit_comfyui_job(job: dict, payload: dict, image_prompt: str) -> dict:
     return job
 
 
+# 백엔드 재시작 등으로 _run_hyperclova_image_job thread가 죽으면 job이 영원히
+# running으로 남아 UI 폴링과 exclusive 워커 stop 가드를 붙잡는다. 클라이언트
+# timeout(기본 420s) + grace를 넘긴 running job은 poll 시점에 failed로 종결한다.
+_HYPERCLOVA_JOB_STALE_GRACE_SECONDS = 120
+
+
+def _fail_stale_hyperclova_job(job: dict) -> dict:
+    if job.get("provider") != "hyperclova_image" or job.get("status") != "running":
+        return job
+    age = time.time() - (job.get("created_at") or 0)
+    if age <= _hyperclova_image_timeout_seconds() + _HYPERCLOVA_JOB_STALE_GRACE_SECONDS:
+        return job
+    job.update(
+        {
+            "status": "failed",
+            "error": f"hyperclova image job stale: running for {int(age)}s without a worker result",
+            "completed_at": int(time.time()),
+        }
+    )
+    return IMAGE_JOB_STORE.save(job)
+
+
 def poll_image_job(job_id: str) -> dict | None:
     job = IMAGE_JOB_STORE.get(job_id)
     if not job:
         return None
     settings = get_settings()
     if job.get("provider") != "comfyui":
-        return public_image_job(job)
+        return public_image_job(_fail_stale_hyperclova_job(job))
     if job.get("status") in COMFYUI_TERMINAL_STATUSES:
         _maybe_release_comfyui_worker(job)
         return public_image_job(job)
@@ -2449,6 +3201,36 @@ def poll_image_job(job_id: str) -> dict | None:
     _cache_completed_image_job(saved_job)
     _maybe_release_comfyui_worker(saved_job)
     return public_image_job(saved_job)
+
+
+def _run_hyperclova_image_job(job_id: str, payload: dict, image_prompt: str) -> None:
+    """hyperclova 네이티브 이미지 job을 background thread에서 실행한다.
+
+    생성이 단일 L4에서 ~260s라 동기 응답은 HTTP·UI 폴링 타임아웃을 초과한다 →
+    ComfyUI 경로처럼 submit(running) + poll 구조로 돌리고, 완료 시 job store와
+    이미지 캐시를 갱신한다. 시작 전에 ensure_hyperclova_image_worker로 단일 GPU
+    exclusive 환경에서 :11602 서버 적재를 보장한다.
+    """
+    job = IMAGE_JOB_STORE.get(job_id) or {"job_id": job_id, "provider": "hyperclova_image"}
+    try:
+        from .runtime_workers import ensure_hyperclova_image_worker
+
+        ensure_hyperclova_image_worker()
+        reference = generate_hyperclova_image_reference(payload, image_prompt)
+        status = "completed" if isinstance(reference, dict) and reference.get("has_image") else "failed"
+        if isinstance(reference, dict) and reference.get("not_configured"):
+            status = "not_configured"
+        job.update(
+            {
+                "status": status,
+                "local_image_reference": reference,
+                "completed_at": int(time.time()),
+            }
+        )
+    except Exception as exc:
+        job.update({"status": "failed", "error": str(exc), "completed_at": int(time.time())})
+    saved_job = IMAGE_JOB_STORE.save(job)
+    _cache_completed_image_job(saved_job)
 
 
 def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = False) -> dict:
@@ -2497,6 +3279,29 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
                 "completed_at": int(time.time()),
             }
         )
+    elif backend == "hyperclova" or (backend == "auto" and settings.has_hyperclova_image):
+        # 네이티브 생성이 ~260s로 HTTP/UI 폴링 타임아웃을 넘으므로 동기 호출하지 않고
+        # ComfyUI처럼 job을 running으로 등록한 뒤 background thread에서 생성한다.
+        # UI는 기존 /ai/image/jobs/{id} 폴링 경로를 그대로 탄다(QA·next_work 2026-06-10).
+        not_configured_reason = _hyperclova_image_not_configured_reason()
+        if not_configured_reason:
+            job.update(
+                {
+                    "provider": "hyperclova_image",
+                    "status": "not_configured",
+                    "message": not_configured_reason,
+                    "completed_at": int(time.time()),
+                }
+            )
+        else:
+            job.update({"provider": "hyperclova_image", "status": "running"})
+            IMAGE_JOB_STORE.save(job)
+            threading.Thread(
+                target=_run_hyperclova_image_job,
+                args=(job_id, dict(payload), image_prompt),
+                name=f"hyperclova-image-{job_id[:8]}",
+                daemon=True,
+            ).start()
     elif backend in {"local", "local_endpoint"} or (backend == "auto" and settings.has_local_image):
         image_reference = generate_local_image_reference(payload, image_prompt)
         job.update(
@@ -2525,6 +3330,8 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
                 "message": (
                     "선택한 OpenAI 엔진에는 OPENAI_API_KEY가 필요합니다."
                     if explicit and backend == "openai"
+                    else "선택한 HyperCLOVA 엔진에는 별도 HYPERCLOVA_IMAGE_BASE_URL/HYPERCLOVA_IMAGE_MODEL이 필요합니다."
+                    if explicit and backend == "hyperclova"
                     else "Set OPENAI_API_KEY, LOCAL_IMAGE_ENDPOINT, or COMFYUI_BASE_URL + (COMFYUI_WORKFLOWS_DIR or COMFYUI_WORKFLOW_PATH) to enable image generation."
                 ),
             }

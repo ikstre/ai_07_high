@@ -48,8 +48,8 @@ def convert_plate_drawing_to_glb(
     model_name = output_path.name
 
     if source_path.suffix.lower() == ".glb":
-        if not output_path.exists():
-            output_path.write_bytes(source_path.read_bytes())
+        # unique_timestamped_model_path가 빈 파일로 경로를 선점해 두므로 항상 내용을 쓴다.
+        output_path.write_bytes(source_path.read_bytes())
         return {
             "model_url": f"{public_base_url}/static/models/{model_name}",
             "model_file": model_name,
@@ -82,7 +82,8 @@ def convert_plate_drawing_to_glb(
     except Exception as exc:
         raise ValueError(f"Drawing converter failed to start: {exc}") from exc
 
-    if result.returncode != 0 or not output_path.exists():
+    # 경로 선점으로 빈 파일이 미리 존재하므로 실제 내용이 쓰였는지(size>0)까지 본다.
+    if result.returncode != 0 or not output_path.exists() or output_path.stat().st_size == 0:
         stderr = (result.stderr or result.stdout or "").strip()[-800:]
         raise ValueError(f"Drawing converter returned {result.returncode}: {stderr}")
 

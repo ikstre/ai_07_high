@@ -66,9 +66,11 @@ CHANNEL_POLICY = {
 
 DEFAULT_POLICY = {"headline_max": 28, "subcopy_max": 84, "cta_max": 16, "hashtag_limit": 5}
 
-# 공백 회피("국내1위", "최 고")까지 잡도록 키의 공백을 \s* 로 바꿔 사전 컴파일한다.
+# 공백 회피("국내1위", "최 고")까지 잡도록 모든 글자 사이에 \s* 를 넣어 사전 컴파일한다.
+# (단어 사이만 \s* 를 넣으면 "최고"처럼 내부 공백 없는 키의 "최 고" 우회를 못 잡는다 —
+#  2026-06-11 QA. 기존에도 부분 문자열 치환이라 음절 간 \s* 허용은 의미상 동일 확장이다.)
 _REPLACEMENT_PATTERNS = [
-    (term, re.compile(r"\s*".join(re.escape(chunk) for chunk in term.split(" "))), replacement)
+    (term, re.compile(r"\s*".join(re.escape(ch) for ch in term if not ch.isspace())), replacement)
     for term, replacement in GLOBAL_REPLACEMENTS.items()
 ]
 
@@ -92,11 +94,14 @@ def _truncate(value: str, limit: int) -> str:
     return value[: max(0, limit - 1)].rstrip() + "…"
 
 
-def _sanitize_hashtag(value: object) -> str:
+def _sanitize_hashtag(value: object, flagged_terms: set[str]) -> str:
     tag = str(value or "").strip()
     if not tag:
         return ""
-    body = re.sub(r"\s+", "", tag.lstrip("#"))
+    # 해시태그도 본문과 같은 금지어 치환을 거친다 — 문자 필터만 하면 "#최고",
+    # "#국내1위키보드" 같은 부당표시가 그대로 통과한다(2026-06-11 QA).
+    body = _sanitize_text(tag.lstrip("#"), flagged_terms)
+    body = re.sub(r"\s+", "", body)
     body = re.sub(r"[^0-9A-Za-z_가-힣ㄱ-ㅎㅏ-ㅣ]", "", body)
     return f"#{body}" if body else ""
 
@@ -118,7 +123,7 @@ def apply_copy_policy(payload: dict, result: dict) -> dict:
     output["spec_bullets"] = [bullet for bullet in spec_bullets if bullet][:5]
 
     hashtag_limit = int(policy["hashtag_limit"])
-    hashtags = [_sanitize_hashtag(tag) for tag in output.get("hashtags", [])]
+    hashtags = [_sanitize_hashtag(tag, flagged_terms) for tag in output.get("hashtags", [])]
     output["hashtags"] = [tag for tag in hashtags if tag][:hashtag_limit]
 
     output["policy"] = {

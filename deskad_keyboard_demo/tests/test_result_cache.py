@@ -80,3 +80,30 @@ def test_image_cache_excludes_binary_bytes(tmp_path, monkeypatch):
     assert cached["seed"] == 7
     assert "image_b64" not in cached  # heavy bytes never persisted to disk
     assert "image_b64s" not in cached
+
+
+# ── 2026-06-11 QA: 다중 접속 쓰기 경쟁 ────────────────────────────────────────
+def test_concurrent_puts_never_leave_partial_or_tmp_files(tmp_path, monkeypatch):
+    import threading
+
+    from backend import result_cache
+
+    monkeypatch.setenv("GPU_WORKER_CACHE_DIR", str(tmp_path))
+    payload = {"copies": ["x" * 2000], "provider": "t"}
+
+    def writer(idx: int):
+        for _ in range(30):
+            result_cache.put_text_cache(f"key{idx % 3}", payload)
+
+    threads = [threading.Thread(target=writer, args=(i,)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    files = list((tmp_path / "text").iterdir())
+    assert files, "writes must land"
+    assert all(f.name.endswith(".json") for f in files), f"tmp leftovers: {files}"
+    for f in files:
+        data = result_cache.get_text_cache(f.stem)
+        assert data and data["copies"] == payload["copies"]

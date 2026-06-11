@@ -43,6 +43,7 @@ def build_ad_payload() -> dict:
         "target_customer": st.session_state.target_customer,
         "selling_point": st.session_state.selling_point,
         "ad_tone": st.session_state.ad_tone,
+        "shot_type": st.session_state.get("shot_type", ""),
         "image_ratio": st.session_state.image_ratio,
         "extra_request": st.session_state.extra_request,
         "model_url": st.session_state.model_url,
@@ -161,14 +162,27 @@ def generate_copy_experiment() -> None:
     st.session_state.copy_result = selected
     st.session_state.copy_selected_provider = provider
 
+
+def generate_copy_variants() -> None:
+    # 선택한 엔진에서 문구 변형 3-4개를 뽑아 나란히 비교/선택한다(로컬처럼 모델 결과로 고른다).
+    st.session_state.copy_experiment_result = api_post(
+        "/ai/copy/variants", build_ad_payload(), timeout=400
+    )
+    provider, selected = first_successful_copy(st.session_state.copy_experiment_result)
+    st.session_state.copy_result = selected
+    st.session_state.copy_selected_provider = provider
+
 def generate_poster() -> None:
     data = api_post("/ai/poster", build_ad_payload(), timeout=300)
     st.session_state.poster_result = data
     st.session_state.copy_result = data["copy"]
     st.session_state.copy_selected_provider = data["copy"].get("provider")
 
-def generate_image_job() -> None:
-    data = api_post("/ai/image/jobs", build_ad_payload(), timeout=180)
+def generate_image_job(force_regen: bool = False) -> None:
+    # force_regen=True는 캐시를 건너뛰고 같은 조건으로 새로 생성한다(결과 불만족 시
+    # 재시도 UX — 2026-06-11 이미지 QA). 서버/워커가 seed를 랜덤화하므로 새 결과가 나온다.
+    path = "/ai/image/jobs?force_regen=true" if force_regen else "/ai/image/jobs"
+    data = api_post(path, build_ad_payload(), timeout=180)
     st.session_state.image_job_result = data
     copy_result = data.get("copy") if isinstance(data, dict) else None
     if isinstance(copy_result, dict):
@@ -224,8 +238,22 @@ def auto_poll_image_job() -> None:
         st.rerun()
         return
 
+    # 엔진별 통상 소요(초). 정확한 ETA가 아니라 "얼마나 기다리는 게 정상인지"의
+    # 기준선 — 게이지는 97%에서 멈춰 완료를 단정하지 않는다(2026-06-11 이미지 QA).
+    expected = {"hyperclova_image": 420, "comfyui": 120, "openai_image": 90}.get(
+        str(job.get("provider") or ""), 180
+    )
     status_slot = st.empty()
-    status_slot.caption(f"이미지 작업 자동 갱신 중 · {job.get('status', 'unknown')} · {int(elapsed)}초 경과")
+    with status_slot.container():
+        st.progress(
+            min(elapsed / expected, 0.97),
+            text=(
+                f"이미지 생성 중 · {job.get('status', 'unknown')} · "
+                f"{int(elapsed)}초 경과 (이 엔진은 보통 ~{expected}초)"
+            ),
+        )
+        if job.get("provider") == "hyperclova_image":
+            st.caption("HyperCLOVA 이미지는 GPU 모델 적재가 겹치면 최대 7분까지 걸릴 수 있어요. 완료되면 결과 영역에 자동 반영됩니다.")
     try:
         updated = refresh_image_job() or job
     except Exception as exc:
@@ -266,7 +294,11 @@ def render_copy_experiment_picker() -> None:
 
     for index, item in enumerate(results):
         provider = item.get("provider", "unknown")
-        label = provider_label(provider)
+        # 변형 모드(같은 엔진의 여러 후보)면 "변형 N"으로, 비교 모드면 엔진명으로 라벨링한다.
+        if item.get("variant") is not None:
+            label = f"변형 {int(item['variant']) + 1} · {provider_label(provider)}"
+        else:
+            label = provider_label(provider)
         model_name = item.get("model") or item.get("runtime_name")
         if model_name:
             label += f" · {model_name}"

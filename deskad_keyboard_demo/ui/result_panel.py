@@ -11,6 +11,7 @@ from ui_steps import render_step_input_panel
 from .ad_content import (
     auto_poll_image_job,
     current_product_export_payload,
+    generate_image_job,
     refresh_image_job,
     render_ad_card_preview_section,
     render_copy_experiment_picker,
@@ -227,13 +228,23 @@ def _render_poster_details() -> None:
                     f"{job.get('provider', 'fallback')} · {job.get('status', 'unknown')} · "
                     f"{job.get('width', '')}×{job.get('height', '')}{elapsed_note}"
                 )
-                col_refresh, col_quality = st.columns(2)
+                col_refresh, col_regen, col_quality = st.columns(3)
                 if col_refresh.button("이미지 작업 상태 갱신", use_container_width=True):
                     try:
                         refresh_image_job()
                         st.rerun()
                     except Exception as exc:
                         st.error(f"상태 확인 실패: {exc}")
+                if col_regen.button(
+                    "같은 조건으로 다시 생성",
+                    use_container_width=True,
+                    disabled=job.get("status") not in IMAGE_JOB_TERMINAL_STATUSES,
+                ):
+                    try:
+                        generate_image_job(force_regen=True)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"재생성 실패: {exc}")
                 if col_quality.button(
                     "이미지 품질 검사 실행",
                     use_container_width=True,
@@ -247,7 +258,14 @@ def _render_poster_details() -> None:
                         st.error(f"품질 검사 실패: {exc}")
                 st.json(job)
             if job.get("status") == "completed":
-                st.caption("완료된 이미지 작업은 다음 포스터 생성 시 자동 합성 후보로 사용됩니다.")
+                st.caption(
+                    "완료된 이미지 작업은 다음 포스터 생성 시 자동 합성 후보로 사용됩니다. "
+                    "결과가 마음에 들지 않으면 '같은 조건으로 다시 생성'(새 seed) 또는 포스터 템플릿 변경 후 재생성을 사용하세요."
+                )
+            elif job.get("status") == "failed":
+                st.warning(
+                    "이미지 생성에 실패했습니다. '같은 조건으로 다시 생성'을 누르면 새로운 seed로 재시도합니다."
+                )
             auto_poll_image_job()
             quality = st.session_state.get("image_quality_report")
             if quality and quality.get("report"):

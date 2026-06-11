@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
@@ -35,15 +36,21 @@ def _llm_max_tokens() -> int:
     return max(0, _int_env("LLM_MAX_TOKENS", 1024))
 
 
-# GPT-5 / o1·o3·o4 계열은 `max_tokens`를 거부하고 `max_completion_tokens`만 받는다.
-# (그 외 모델·로컬 OpenAI 호환 서버는 기존대로 `max_tokens`.)
-_COMPLETION_TOKENS_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+# GPT-5 / o1·o3·o4 계열(reasoning 모델)은 `max_tokens`를 거부하고 `max_completion_tokens`만
+# 받으며, 기본값(1.0) 외 `temperature`도 400(unsupported_value)으로 거부한다.
+# o-시리즈는 bare prefix로 잡으면 로컬 OpenAI 호환 모델(o3-community-7b 등)을 오탐하므로
+# "o1/o3/o4" 단독, 또는 공식 suffix(-mini/-preview/-pro/-deep…)·날짜 suffix만 매칭한다.
+_REASONING_MODEL_RE = re.compile(r"^(gpt-5|o[134]($|-(mini|preview|pro|deep|\d)))")
+
+
+def _is_reasoning_model(model: str) -> bool:
+    name = (model or "").strip().lower()
+    base = name.rsplit("/", 1)[-1]  # "org/gpt-5.4-mini" 같은 경로형도 처리
+    return bool(_REASONING_MODEL_RE.match(base))
 
 
 def _max_tokens_param(model: str) -> str:
-    name = (model or "").strip().lower()
-    base = name.rsplit("/", 1)[-1]  # "org/gpt-5.4-mini" 같은 경로형도 처리
-    return "max_completion_tokens" if base.startswith(_COMPLETION_TOKENS_PREFIXES) else "max_tokens"
+    return "max_completion_tokens" if _is_reasoning_model(model) else "max_tokens"
 
 
 def _post_with_retry(url: str, *, headers: dict, json: dict, timeout: int, provider: str) -> requests.Response:
@@ -160,14 +167,19 @@ class ChatCompletionAdapter:
             )
             request_messages = [{"role": "user", "content": flattened}]
 
+        model_name = self.model or self.default_model
         body: dict = {
-            "model": self.model or self.default_model,
-            "temperature": 0.7 if temperature is None else temperature,
+            "model": model_name,
             "messages": request_messages,
         }
+        # reasoning 모델(GPT-5/o-시리즈)에는 temperature를 아예 보내지 않는다(서버 기본 1.0).
+        # 비기본 temperature를 넣으면 400으로 거부돼 카피 생성이 조용히 규칙기반 폴백으로
+        # 추락한다(QA 2026-06-10 §10 — PR #27의 max_tokens 수정과 동일한 실패 모드).
+        if not _is_reasoning_model(model_name):
+            body["temperature"] = 0.7 if temperature is None else temperature
         max_tokens = _llm_max_tokens()
         if max_tokens:
-            body[_max_tokens_param(self.model or self.default_model)] = max_tokens
+            body[_max_tokens_param(model_name)] = max_tokens
         if self.json_response_format:
             body["response_format"] = {"type": "json_object"}
 

@@ -151,3 +151,40 @@ def test_unknown_channel_falls_back_to_hero():
 def test_broken_hex_color_does_not_crash():
     out = _prompt(case_color="#ZZZ", keycap_color="not-a-color")
     assert isinstance(out, str) and len(out) > 0
+
+
+# ── HyperCLOVA native image compact prompt (2026-06-11 텍스트 구워짐 회귀) ─────
+def _hyperclova_prompt(**over):
+    from backend.ai import _hyperclova_native_image_prompt
+
+    payload = dict(_BASE)
+    payload.update(over)
+    return _hyperclova_native_image_prompt(payload, "fallback prompt")
+
+
+def test_hyperclova_prompt_has_no_typography_guard():
+    prompt = _hyperclova_prompt()
+    assert "no letters" in prompt
+    assert "no numbers" in prompt
+    assert "no logos" in prompt
+
+
+def test_hyperclova_prompt_does_not_ask_for_text_anywhere():
+    # "readable keycap legends"/"overlay text"는 no-typography 지시와 모순되어
+    # 이미지에 글자가 구워지는 원인이 됐다.
+    prompt = _hyperclova_prompt().lower()
+    assert "legend" not in prompt
+    assert "overlay text" not in prompt
+    assert "headline" not in prompt
+
+
+def test_hyperclova_prompt_stays_compact():
+    prompt = _hyperclova_prompt(extra_request="따뜻한 분위기로")
+    assert len(prompt) <= 1400
+
+
+def test_hyperclova_prompt_strips_hex_codes_from_colors():
+    prompt = _hyperclova_prompt(case_color="#F5F0E6", keycap_color="#EAE3D2")
+    assert "#f5f0e6" not in prompt.lower()
+    assert "#eae3d2" not in prompt.lower()
+    assert "case" in prompt  # 색 이름 자체는 유지
