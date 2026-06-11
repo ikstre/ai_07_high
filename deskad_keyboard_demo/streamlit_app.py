@@ -7,6 +7,7 @@ import streamlit as st
 
 from ui.components import render_campaign_studio_header
 from ui.context import build_step_ui_context
+from ui.login import is_authenticated, render_login_page
 from ui.result_panel import render_result_panel
 from ui.rendering import render_desk_setup
 from ui.sidebar import render_sidebar
@@ -29,6 +30,10 @@ st.set_page_config(
 
 render_base_layout_styles()
 initialize_session_defaults()
+
+if not is_authenticated():
+    render_login_page()
+    st.stop()
 
 
 def go_next() -> None:

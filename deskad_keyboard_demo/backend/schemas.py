@@ -7,6 +7,31 @@ from pydantic import BaseModel, Field
 from .assets import enabled_asset_ids
 
 
+class LoginRequest(BaseModel):
+    """deskad 운영 계정 로그인 요청을 검증한다."""
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class LoginResponse(BaseModel):
+    """로그인 결과 — 실패도 200 + 코드형 error로 응답한다(Streamlit 폼 UX)."""
+
+    ok: bool
+    token: str | None = None
+    display_name: str | None = None
+    expires_at: float | None = None
+    # "invalid_credentials" | "locked" | "not_configured"
+    error: str | None = None
+    retry_after_seconds: int | None = None
+
+
+class LogoutRequest(BaseModel):
+    """세션 토큰 무효화 요청을 검증한다."""
+
+    token: str = Field(min_length=1, max_length=128)
+
+
 class KeyboardRenderRequest(BaseModel):
     """키보드 단품/셋업 렌더링 공통 옵션을 검증한다."""
 

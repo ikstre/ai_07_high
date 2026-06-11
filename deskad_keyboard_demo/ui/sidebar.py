@@ -8,6 +8,7 @@ import streamlit as st
 
 from .api_client import fetch_security_config
 from .constants import STEP_LABELS
+from .login import logout
 from .theme import THEME_LABELS, THEME_OPTIONS
 
 
@@ -25,6 +26,15 @@ def render_sidebar(on_step_change: Callable[[], None]) -> None:
 
         st.markdown("## DeskAd AI")
         st.caption("3D 셋업부터 광고 콘텐츠까지 단계별로 제작합니다.")
+
+        display_name = st.session_state.get("auth_display_name")
+        if display_name:
+            user_col, logout_col = st.columns([1.6, 1])
+            with user_col:
+                st.caption(f"{display_name} 님")
+            with logout_col:
+                if st.button("로그아웃", key="logout_button", use_container_width=True):
+                    logout()
 
         st.divider()
 

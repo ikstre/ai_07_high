@@ -5,6 +5,10 @@ from __future__ import annotations
 from .theme import DEFAULT_THEME_MODE
 
 DEFAULTS = {
+    "auth_token": None,
+    "auth_display_name": None,
+    "auth_expires_at": None,
+    "login_fail_count": 0,
     "step": 1,
     "step_selector": 1,
     "product_name": "",

@@ -31,6 +31,7 @@ from .quality_gate import (
 from .security import install_secret_log_filter
 
 install_secret_log_filter()
+from . import auth
 from .app_factory import create_app, ensure_static_dirs
 from .cad import copy_existing_glb, handle_model_upload_bytes
 from .config import get_settings, redacted_settings
@@ -51,6 +52,9 @@ from .schemas import (
     DeskSetupRenderRequest,
     KeyboardRenderRequest,
     LibraryModelRequest,
+    LoginRequest,
+    LoginResponse,
+    LogoutRequest,
     PlateDrawingRenderRequest,
     UploadedModelRequest,
 )
@@ -93,6 +97,22 @@ def _selected_plate_or_400(plate_id: str) -> dict:
 def health():
     """서비스 상태와 마스킹된 설정 정보를 반환한다."""
     return {"status": "ok", "config": redacted_settings()}
+
+
+@app.post("/auth/login", response_model=LoginResponse)
+def auth_login(request: LoginRequest):
+    """deskad 운영 계정 로그인 — 성공 시 메모리 세션 토큰을 발급한다.
+
+    실패도 200 + {ok: false, error} 코드형으로 응답한다(폼 UX 일관성).
+    실패 사유에 아이디/비밀번호 어느 쪽이 틀렸는지는 노출하지 않는다.
+    """
+    return auth.login(request.username, request.password)
+
+
+@app.post("/auth/logout")
+def auth_logout(request: LogoutRequest):
+    """세션 토큰을 무효화한다. 이미 없던 토큰이어도 200으로 응답한다."""
+    return {"ok": auth.logout(request.token)}
 
 
 @app.get("/security/config")

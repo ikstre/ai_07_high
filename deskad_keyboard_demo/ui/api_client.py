@@ -71,6 +71,22 @@ def api_post(path: str, payload: dict, timeout: int = 30) -> dict:
     return response.json()
 
 
+def api_login(username: str, password: str) -> dict:
+    """/auth/login 호출 — 연결 실패도 코드형 dict로 돌려 폼에서 일관 처리한다."""
+    try:
+        return api_post("/auth/login", {"username": username, "password": password}, timeout=10)
+    except Exception:
+        return {"ok": False, "error": "request_failed"}
+
+
+def api_logout(token: str) -> dict:
+    """/auth/logout 호출 — 실패해도 로컬 세션 정리는 진행되므로 조용히 무시한다."""
+    try:
+        return api_post("/auth/logout", {"token": token}, timeout=10)
+    except Exception:
+        return {"ok": False}
+
+
 def activate_engine_track(track: str) -> dict:
     """선택한 생성 엔진(트랙)의 GPU 워커를 백엔드에 미리 워밍업시킨다.
 
