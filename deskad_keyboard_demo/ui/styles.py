@@ -575,6 +575,17 @@ def render_ui_theme_styles(theme_mode: str | None) -> None:
             color: #ffffff;
             border-radius: 8px !important;
           }}
+          /* 사이드바 버튼(로그아웃 등): 본문 surface 배경을 그대로 쓰면 사이드바의
+             강제 흰 글자와 겹쳐 안 보인다 — 어느 테마 배경에서도 보이는 고스트 버튼. */
+          [data-testid="stSidebar"] .stButton > button {{
+            background: transparent !important;
+            color: {tokens["sidebar_text"]} !important;
+            border: 1px solid {tokens["sidebar_muted"]} !important;
+          }}
+          [data-testid="stSidebar"] .stButton > button:hover {{
+            border-color: {tokens["sidebar_text"]} !important;
+            background: rgba(127, 127, 127, 0.16) !important;
+          }}
           .section-label {{
             color: {tokens["subtle"]};
           }}
