@@ -230,7 +230,13 @@ def auto_poll_image_job() -> None:
         started_at = time.time()
         st.session_state.image_poll_started_at = started_at
     elapsed = time.time() - started_at
-    timeout = int(st.session_state.image_poll_timeout_seconds)
+    # grid 3컷처럼 여러 장을 순차 생성하는 job은 장수만큼 대기 예산을 늘린다
+    # (backend stale 판정과 같은 산식 — 기본 600s로는 3컷 ~840s+를 못 기다린다).
+    try:
+        image_count = max(1, int(job.get("requested_image_count") or 1))
+    except (TypeError, ValueError):
+        image_count = 1
+    timeout = int(st.session_state.image_poll_timeout_seconds) * image_count
     if elapsed > timeout:
         st.session_state.image_polling_enabled = False
         st.session_state.image_poll_started_at = None
@@ -242,7 +248,7 @@ def auto_poll_image_job() -> None:
     # 기준선 — 게이지는 97%에서 멈춰 완료를 단정하지 않는다(2026-06-11 이미지 QA).
     expected = {"hyperclova_image": 420, "comfyui": 120, "openai_image": 90}.get(
         str(job.get("provider") or ""), 180
-    )
+    ) * image_count
     status_slot = st.empty()
     with status_slot.container():
         st.progress(
@@ -252,6 +258,8 @@ def auto_poll_image_job() -> None:
                 f"{int(elapsed)}초 경과 (이 엔진은 보통 ~{expected}초)"
             ),
         )
+        if job.get("message"):
+            st.caption(str(job["message"]))
         if job.get("provider") == "hyperclova_image":
             st.caption("HyperCLOVA 이미지는 GPU 모델 적재가 겹치면 최대 7분까지 걸릴 수 있어요. 완료되면 결과 영역에 자동 반영됩니다.")
     try:

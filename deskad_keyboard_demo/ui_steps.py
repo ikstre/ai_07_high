@@ -105,6 +105,11 @@ def _render_poster_template_cards(ctx: dict[str, Any]) -> None:
                 thumb = thumbnails.get(key)
                 if thumb:
                     st.markdown(thumb, unsafe_allow_html=True)
+    if st.session_state.poster_template == "grid_three" and st.session_state.get("engine") == "hyperclova":
+        st.info(
+            "HyperCLOVA 트랙의 Grid 3컷은 컷을 한 장씩 순차 생성해 보통 10~15분이 걸립니다. "
+            "생성 중 진행 상황이 표시되며, 빠른 결과가 필요하면 다른 템플릿이나 엔진을 선택하세요."
+        )
 
 
 def _asset_enabled(asset_id: str) -> bool:
