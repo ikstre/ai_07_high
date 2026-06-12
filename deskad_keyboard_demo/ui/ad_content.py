@@ -250,7 +250,7 @@ def auto_poll_image_job() -> None:
         str(job.get("provider") or ""), 180
     ) * image_count
     status_slot = st.empty()
-    with status_slot.container():
+    with status_slot.container(border=True):
         st.progress(
             min(elapsed / expected, 0.97),
             text=(

@@ -162,6 +162,9 @@ def _render_poster_result(poster: dict) -> None:
 
 def _render_ad_preview() -> None:
     st.markdown("### 광고 미리보기")
+    # 이미지 생성 진행 게이지는 접힌 '작업 상세' expander가 아니라 결과를 기다리며
+    # 보고 있는 미리보기 상단에 표시한다(2026-06-12 QA: 로딩바 가시성).
+    auto_poll_image_job()
     render_studio_status_cards()
 
     poster = st.session_state.poster_result
@@ -266,7 +269,6 @@ def _render_poster_details() -> None:
                 st.warning(
                     "이미지 생성에 실패했습니다. '같은 조건으로 다시 생성'을 누르면 새로운 seed로 재시도합니다."
                 )
-            auto_poll_image_job()
             quality = st.session_state.get("image_quality_report")
             if quality and quality.get("report"):
                 report = quality["report"]
