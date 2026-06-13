@@ -1,2 +1,9 @@
 [theme]
+# native 기본 테마를 커스텀 기본 테마(ice_navy)에 맞춘다. 이렇게 하면 첫 페인트가
+# 커스텀 CSS(st.markdown 주입)가 적용되기 전에도 비슷하게 보여, 상품명 입력 등
+# 첫 상호작용 후에야 색이 "갑자기 바뀐 채 유지"되는 현상을 줄인다(2026-06-13 QA #2).
+base = "light"
 primaryColor = "#3b82f6"
+backgroundColor = "#eef4f8"
+secondaryBackgroundColor = "#e4edf4"
+textColor = "#0f172a"

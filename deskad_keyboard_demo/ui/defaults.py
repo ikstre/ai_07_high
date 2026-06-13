@@ -17,6 +17,7 @@ DEFAULTS = {
     "target_channel": "인스타그램",
     "target_customer": "",
     "selling_point": "",
+    "product_detail": "",
     "layout": "65",
     "product_library": "keyboard_layout 샘플",
     "keyboard_model": "Qwertykeys Neo65",

@@ -94,6 +94,9 @@ class AdContentRequest(DeskSetupRenderRequest):
     target_channel: str = Field(default="인스타그램", max_length=30)
     target_customer: str = Field(default="깔끔한 데스크 셋업을 원하는 직장인", max_length=120)
     selling_point: str = Field(default="조용한 타건감, 크림 톤 키캡, 작은 책상에도 잘 맞는 65% 배열", max_length=240)
+    # 상세 설명(상세페이지/경쟁사 리스팅 등 장문). selling_point가 핵심 특징 요약이라면 이쪽은
+    # 풍부한 본문 — 잘리지 않고 카피 프롬프트로 전달돼 구체적인 광고 본문 생성에 쓰인다(2026-06-13 QA #2).
+    product_detail: str = Field(default="", max_length=2000)
     ad_tone: str = Field(default="감성형", max_length=30)
     # 이미지 구도(샷 타입). 비우면 채널별 기본값(ai._DEFAULT_SHOT_BY_CHANNEL)으로 결정.
     # 이 입력 필드가 없으면 detail_macro 등 채널 기본값에 없는 구도는 영구 도달 불가(QA #5).

@@ -30,6 +30,10 @@ st.set_page_config(
 
 render_base_layout_styles()
 initialize_session_defaults()
+# 테마 CSS는 사이드바/본문(가변 요소)보다 먼저, 고정된 위치에서 주입한다. 위젯이 바뀌면
+# 새 값이 rerun 시작 시점에 session_state에 이미 반영되므로 여기서 읽어도 최신이며,
+# 주입 위치가 안정되어 첫 상호작용 후 테마가 바뀐 채 유지되던 현상을 막는다(2026-06-13 QA #2).
+render_ui_theme_styles(st.session_state.get("ui_theme_mode"))
 
 if not is_authenticated():
     render_login_page()
@@ -45,7 +49,6 @@ def go_previous() -> None:
 
 
 render_sidebar(sync_step_from_sidebar)
-render_ui_theme_styles(st.session_state.get("ui_theme_mode"))
 render_campaign_studio_header()
 
 render_result_panel(build_step_ui_context(sync_layout_from_model), go_previous, go_next)
