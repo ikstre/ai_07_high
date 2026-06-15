@@ -85,7 +85,11 @@ DESKAD_UID=$(id -u) DESKAD_GID=$(id -g) docker compose up -d --build
 `.env`의 `*_BASE_URL`(`http://127.0.0.1:<port>`)이 **그대로** 호스트 워커(ComfyUI 8188 · Ollama 11434 ·
 SEED 11501 · Omni 11601/11602)에 닿습니다 — URL을 바꿀 필요가 없습니다.
 
-- 워커가 떠 있지 않은 엔진은 실패하므로, 필요한 워커를 호스트에서 먼저 기동하세요.
+- 워커가 떠 있지 않은 엔진은 실패합니다. **컨테이너는 `always_on`이라 Omni 워커(11601/11602)를 자동 기동하지 않으므로** 호스트에서 직접 관리하세요(ComfyUI·Ollama는 systemd):
+  ```bash
+  tools/omni_workers.sh start image    # Omni 이미지 워커(:11602). vision은 start vision (둘은 VRAM 경합 → 상호배타)
+  tools/omni_workers.sh status         # 워커 가동 상태 + GPU 여유
+  ```
 - 앱·워커를 **다른 호스트로 분리**한다면 host 네트워크 대신 bridge + `host.docker.internal`(또는 실제 워커 호스트 URL)로 `.env`를 조정하세요.
 
 ---
