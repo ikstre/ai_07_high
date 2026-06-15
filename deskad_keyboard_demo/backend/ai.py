@@ -3513,6 +3513,10 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
         # 네이티브 생성이 ~260s로 HTTP/UI 폴링 타임아웃을 넘으므로 동기 호출하지 않고
         # ComfyUI처럼 job을 running으로 등록한 뒤 background thread에서 생성한다.
         # UI는 기존 /ai/image/jobs/{id} 폴링 경로를 그대로 탄다(QA·next_work 2026-06-10).
+        # 응답의 image_prompt는 ComfyUI용 브래킷 프롬프트라 Omni에 실제로 가는 native 프롬프트와
+        # 다르다(그라운딩 _LAYOUT_ROW_SPEC_EN 등이 거기 있음). 실제 전송 프롬프트를 job에 노출해
+        # 재생성 가드가 폴링 전에 그라운딩 적재를 검증하고 Omni 충실도도 디버깅 가능하게 한다.
+        job["native_image_prompt"] = _hyperclova_native_image_prompt(payload, image_prompt)
         not_configured_reason = _hyperclova_image_not_configured_reason()
         if not_configured_reason:
             job.update(
