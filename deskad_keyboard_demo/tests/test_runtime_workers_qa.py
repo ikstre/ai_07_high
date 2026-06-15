@@ -177,6 +177,53 @@ def test_create_image_job_returns_running_for_hyperclova_thread(monkeypatch):
     ]
 
 
+def test_create_image_job_exposes_native_omni_prompt_for_guard(monkeypatch):
+    # 응답의 image_prompt는 ComfyUI 브래킷 프롬프트라 그라운딩(_LAYOUT_ROW_SPEC_EN 등)이 안 보인다.
+    # job에 실제 전송되는 native 프롬프트를 노출해야 재생성 가드가 폴링 전에 그라운딩 적재를
+    # 검증할 수 있다(2026-06-15 라이브 검증: 서버가 구코드면 가드가 ~1초에 차단해야 함).
+    saved: dict[str, dict] = {}
+
+    class Store:
+        def get(self, job_id):
+            record = saved.get(job_id)
+            return dict(record) if record else None
+
+        def save(self, job):
+            saved[job["job_id"]] = dict(job)
+            return dict(job)
+
+        def all(self):
+            return dict(saved)
+
+    class Thread:
+        def __init__(self, *, target, args, name, daemon):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(ai, "IMAGE_JOB_STORE", Store())
+    monkeypatch.setattr(ai, "_select_workflow_path", lambda payload: None)
+    monkeypatch.setattr(ai, "_image_backend_config", lambda: {})
+    monkeypatch.setattr(ai, "_hyperclova_image_not_configured_reason", lambda: None)
+    monkeypatch.setattr(ai.threading, "Thread", Thread)
+    monkeypatch.setattr(runtime_workers, "schedule_idle_reap", lambda: None)
+
+    result = ai.create_image_job(
+        {"engine": "hyperclova", "image_ratio": "1:1", "layout": "65", "keycap_profile": "cherry"},
+        "bracketed comfyui prompt without grounding",
+        force_regen=True,
+    )
+
+    native = result.get("native_image_prompt", "")
+    # 가드가 확인할 그라운딩 마커가 노출된 native 프롬프트에 실제로 들어 있어야 한다.
+    assert "Build the exact board" in native
+    assert "ANSI-staggered rows" in native and "right-side arrow cluster" in native
+    assert "sculpted" in native  # Cherry 키캡 높이 그라운딩
+    # 응답에 함께 실린 ComfyUI image_prompt와는 다른(=실제 전송) 프롬프트여야 한다.
+    assert native != "bracketed comfyui prompt without grounding"
+
+
 def test_worker_log_path_lives_under_runtime_dir():
     path = runtime_workers._worker_log_path(runtime_workers.HYPERCLOVA_IMAGE_WORKER)
     assert path.name == "hyperclova_image_worker.log"

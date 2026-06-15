@@ -155,6 +155,13 @@ def _render_product_info_step() -> None:
     )
     st.session_state.target_customer = st.text_input("타깃 고객", st.session_state.target_customer, placeholder="예: 깔끔한 데스크 셋업을 원하는 직장인")
     st.session_state.selling_point = st.text_area("핵심 특징", st.session_state.selling_point, height=95, placeholder="예: 조용한 타건감, 크림 톤 키캡, 작은 책상에도 잘 맞는 65% 배열")
+    st.session_state.product_detail = st.text_area(
+        "상세 설명 (선택)",
+        st.session_state.get("product_detail", ""),
+        height=140,
+        placeholder="상세페이지 본문이나 타 사이트 제품 설명을 붙여넣으면 더 자세한 광고 문구가 생성됩니다. (재질·구조·구성·사용 시나리오 등)",
+        help="핵심 특징이 한 줄 요약이라면, 여기에는 긴 본문을 넣어도 됩니다. 요약 없이 그대로 카피 생성에 반영됩니다.",
+    )
     missing = missing_product_fields()
     if missing:
         st.caption(f"필수 입력값: {', '.join(missing)}")

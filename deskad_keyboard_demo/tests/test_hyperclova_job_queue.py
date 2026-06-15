@@ -91,6 +91,76 @@ def test_second_job_queues_until_first_finishes(monkeypatch):
     assert "message" not in job_b
 
 
+# 1x1 투명 PNG (포스터 SVG 임베드 검증용 — 실제 디코드 가능한 base64)
+_ONE_PX_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+
+def test_repeated_image_jobs_then_poster(monkeypatch, tmp_path):
+    """이미지 생성을 새로(여러 번) 재생성해도 매번 완료되고, 완료 잡에서
+    이미지를 회수해 포스터가 정상 생성되는지 검증한다(2026-06-13 QA #1).
+    재생성 반복 후 포스터 단계가 깨지지 않는지가 핵심."""
+    import backend.runtime_workers as runtime_workers
+
+    store = _Store({})
+    monkeypatch.setattr(ai, "IMAGE_JOB_STORE", store)
+    monkeypatch.setattr(runtime_workers, "ensure_hyperclova_image_worker", lambda: None)
+
+    counter = {"n": 0}
+
+    def fake_reference(payload, image_prompt, *, on_progress=None):
+        counter["n"] += 1
+        return {
+            "provider": "hyperclova_image",
+            "has_image": True,
+            "image_b64": _ONE_PX_PNG,
+            "image_count": 1,
+        }
+
+    monkeypatch.setattr(ai, "generate_hyperclova_image_reference", fake_reference)
+
+    payload = {"poster_template": "minimal_card", "product_name": "QwertyKeys Neo65"}
+    job_ids = []
+    for i in range(3):  # 구도 바꿔가며 3번 재생성하는 상황
+        jid = f"regen{i}"
+        store.save({
+            "job_id": jid,
+            "provider": "hyperclova_image",
+            "status": "running",
+            "created_at": int(time.time()),
+            "requested_image_count": 1,
+        })
+        ai._run_hyperclova_image_job(jid, payload, "image prompt")
+        job_ids.append(jid)
+
+    # 3번의 재생성이 모두 완료(직렬 lock이 잡혀도 순차 실행은 막히지 않음)
+    assert counter["n"] == 3
+    assert [store.get(j)["status"] for j in job_ids] == ["completed"] * 3
+    # lock이 매번 정상 해제됐는지 — 다음 잡이 즉시 잡을 수 있어야 함
+    assert ai._HYPERCLOVA_IMAGE_JOB_LOCK.acquire(blocking=False) is True
+    ai._HYPERCLOVA_IMAGE_JOB_LOCK.release()
+
+    # 임의의 완료 잡에서 이미지 레퍼런스를 회수 → 포스터 생성
+    for jid in job_ids:
+        ref = ai.image_reference_from_job(jid)
+        assert ref["has_image"] is True
+        assert ref["image_b64"] == _ONE_PX_PNG
+
+    meta = ai.save_poster_svg(
+        payload=payload,
+        copy_result={"headline": "헤드라인", "subcopy": "서브카피", "cta": "구매하기", "copies": ["카피"]},
+        poster_dir=tmp_path,
+        image_b64=ref["image_b64"],
+    )
+    poster_path = meta["poster_path"]
+    assert poster_path.exists()
+    svg = poster_path.read_text(encoding="utf-8")
+    assert "data:image/png;base64," in svg  # 회수한 이미지가 포스터에 실제 임베드됨
+    assert "QwertyKeys Neo65" in svg
+
+
 def test_stale_queued_job_fails_when_heartbeat_lost(monkeypatch):
     records = {
         "lost": {

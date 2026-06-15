@@ -153,7 +153,7 @@ GPU 작업을 줄이려 텍스트/이미지 결과를 디스크에 캐시한다.
 2. **사용 흔적 점검** - GitHub security log, OpenAI usage dashboard, HF token activity
 3. **재발급 + .env 교체** - 값을 화면에 띄우지 않는 방법:
    ```bash
-   cd /home/leetaeho/ai_07_high/deskad_keyboard_demo
+   cd <REPO_ROOT>/deskad_keyboard_demo
    read -s -p "New TOKEN: " T && \
      sed -i.bak -E "s|^GITHUB_TOKEN=.*$|GITHUB_TOKEN=${T}|" .env && \
      unset T
@@ -173,7 +173,7 @@ GPU 작업을 줄이려 텍스트/이미지 결과를 디스크에 캐시한다.
 ### Layer 1: nginx basic auth + self-signed HTTPS (적용 완료)
 
 - 패키지: `nginx 1.24.0`, `apache2-utils`
-- 인증서: `/etc/nginx/ssl/deskad.crt` (self-signed, CN=34.27.86.182, 10년 유효)
+- 인증서: `/etc/nginx/ssl/deskad.crt` (self-signed, CN=<SERVER_IP>, 10년 유효)
 - 키:    `/etc/nginx/ssl/deskad.key` (root:root 0600)
 - htpasswd: `/etc/nginx/.deskad_htpasswd` (root:www-data 0640, bcrypt)
 - 설정: `/etc/nginx/sites-enabled/deskad`
@@ -187,7 +187,7 @@ GPU 작업을 줄이려 텍스트/이미지 결과를 디스크에 캐시한다.
 비밀번호 갱신 (echo OFF, 한 줄):
 
 ```bash
-sudo htpasswd -B /etc/nginx/.deskad_htpasswd deskad
+sudo htpasswd -B /etc/nginx/.deskad_htpasswd <AUTH_USER>
 # 추가 사용자 만들기:  sudo htpasswd -B /etc/nginx/.deskad_htpasswd <new_user>
 # 사용자 삭제:        sudo htpasswd -D /etc/nginx/.deskad_htpasswd <user>
 # 변경 후 reload 필요 없음 (nginx가 매 요청마다 파일 읽음)
@@ -199,9 +199,9 @@ VM 안의 서비스 계정은 compute scope가 없어 자동화 불가. 본인 P
 
 ```bash
 # 1) 프로젝트 선택
-gcloud config set project sprint-ai-chunk3-01
+gcloud config set project <GCP_PROJECT_ID>
 
-# 2) 본인 노트북/공유기 외부 IP 확인 (현재 SSH 세션에서 잡힌 IP: 112.162.29.176)
+# 2) 본인 노트북/공유기 외부 IP 확인 (현재 SSH 세션에서 잡힌 IP: <ADMIN_IP>)
 MY_IP=$(curl -s ifconfig.me)
 echo "$MY_IP"
 
@@ -222,7 +222,7 @@ gcloud compute firewall-rules list --filter="allowed.ports~8501" --format="value
 또는 GCP Console:
 - VPC 네트워크 > 방화벽 > 규칙 만들기
 - 이름 `deskad-https-allow` / 방향 `수신` / 대상 `모든 인스턴스`
-- 소스 IPv4: 본인 IP/32 (예: 112.162.29.176/32)
+- 소스 IPv4: 본인 IP/32 (예: <ADMIN_IP>/32)
 - 프로토콜/포트: `tcp:8443`
 
 IP가 바뀌면 (KT 망 등) 위 명령의 `--source-ranges` 만 다시 update:
@@ -232,7 +232,7 @@ gcloud compute firewall-rules update deskad-https-allow --source-ranges=<new-ip>
 
 ### 접속 URL
 
-- 외부: `https://34.27.86.182:8443` (브라우저가 self-signed cert 경고 → "고급 → 진행" 한 번 확인)
+- 외부: `https://<SERVER_IP>:8443` (브라우저가 self-signed cert 경고 → "고급 → 진행" 한 번 확인)
 - 로컬: `http://127.0.0.1:8501` (VM 내부 SSH에서만)
 
 ### 운영 점검
@@ -245,7 +245,7 @@ sudo systemctl status nginx
 curl -sk -o /dev/null -w "%{http_code}\n" https://127.0.0.1:8443/
 
 # 올바른 자격증명 - 200
-curl -sk -u deskad:<password> -o /dev/null -w "%{http_code}\n" https://127.0.0.1:8443/
+curl -sk -u <AUTH_USER>:<password> -o /dev/null -w "%{http_code}\n" https://127.0.0.1:8443/
 
 # 인증서 만료일
 echo | openssl s_client -connect 127.0.0.1:8443 2>/dev/null | openssl x509 -noout -dates
@@ -255,7 +255,7 @@ echo | openssl s_client -connect 127.0.0.1:8443 2>/dev/null | openssl x509 -noou
 
 ```bash
 # 한 줄로 모든 점검:
-( cd /home/leetaeho/ai_07_high/deskad_keyboard_demo && \
+( cd <REPO_ROOT>/deskad_keyboard_demo && \
   python tools/scan_secrets.py --all && \
   stat -c '%n %a' .env 2>/dev/null && \
   find data/runtime -type f -exec stat -c '%n %a' {} + 2>/dev/null && \

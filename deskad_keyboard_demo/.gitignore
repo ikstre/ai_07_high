@@ -3,3 +3,9 @@ static/
 __pycache__/
 *.py[cod]
 data/runtime/cache/
+
+# docs/ is local-only by default: work logs, handoffs, daily reports, run artifacts
+# must NOT go to GitHub. Whitelist genuine documentation (guides/schema/manuals)
+# explicitly with a leading "!" (e.g. the security guide below).
+docs/*
+!docs/security.md

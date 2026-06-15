@@ -47,6 +47,7 @@ def build_ad_payload() -> dict:
         "target_channel": st.session_state.target_channel,
         "target_customer": st.session_state.target_customer,
         "selling_point": st.session_state.selling_point,
+        "product_detail": st.session_state.get("product_detail", ""),
         "ad_tone": st.session_state.ad_tone,
         "shot_type": st.session_state.get("shot_type", ""),
         "image_ratio": st.session_state.image_ratio,

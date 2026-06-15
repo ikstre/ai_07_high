@@ -49,6 +49,20 @@ def test_instagram_default_uses_top_down():
     assert _COMPOSITION_TEMPLATES["top_down"]["angle"] in prompt
 
 
+# ── 탑다운(flatlay): 진짜 오버헤드 + 정면 입면 유발하던 '세워진 모니터' 제거 (2026-06-15) ──
+def test_top_down_is_overhead_flatlay_without_standing_monitor():
+    prompt = _prompt(shot_type="top_down")
+    low = prompt.lower()
+    # 오버헤드 신호 중첩
+    assert "directly overhead" in low and "bird's-eye" in low
+    assert "lying flat" in low and "straight down" in low
+    # desk 분기의 '세워진 모니터' 신호가 새어나오지 않아야(정면 입면 회귀 원인)
+    assert "no upright monitor" in low
+    assert "monitor glass reflections" not in low
+    # 원근 컷 네거티브로 정면/3-4 배제
+    assert "no front or three-quarter perspective" in low
+
+
 # ── Fix 2: shot_type 배선 (★ main 회귀 문서화) ─────────────────────────────
 def test_detail_macro_only_reachable_via_explicit_shot_type():
     """detail_macro는 어떤 채널 기본값으로도 안 나온다.
@@ -153,6 +167,31 @@ def test_broken_hex_color_does_not_crash():
     assert isinstance(out, str) and len(out) > 0
 
 
+# ── 배열별 넘패드 제약: 컴팩트=금지 / 풀배열(104)=필수 (65% 입력에 풀사이즈 나오던 오프-브리프 방지) ──
+def test_compact_layout_forbids_numpad():
+    for layout in ("60", "65", "75", "87"):
+        prompt = _prompt(layout=layout)
+        assert "no numpad" in prompt, f"{layout}%: 넘패드 금지 네거티브 누락"
+        assert "include the right-side numeric keypad" not in prompt
+
+
+def test_full_size_layout_requires_numpad_and_keeps_it():
+    prompt = _prompt(layout="104")
+    assert "include the right-side numeric keypad" in prompt
+    assert "no numpad" not in prompt, "풀배열에 넘패드 금지 네거티브가 잘못 적용됨"
+
+
+# ── 키보드 전체 노출: 디테일(macro) 컷이 아니면 잘림 없이 프레임 안에 다 들어오게 강제 ──
+def test_non_macro_shot_requires_whole_keyboard_in_frame():
+    prompt = _prompt(target_channel="상세페이지", shot_type="")  # hero (non-macro)
+    assert "the entire keyboard fully within frame" in prompt
+
+
+def test_macro_shot_allows_crop():
+    prompt = _prompt(shot_type="detail_macro")
+    assert "the entire keyboard fully within frame" not in prompt
+
+
 # ── HyperCLOVA native image compact prompt (2026-06-11 텍스트 구워짐 회귀) ─────
 def _hyperclova_prompt(**over):
     from backend.ai import _hyperclova_native_image_prompt
@@ -188,3 +227,13 @@ def test_hyperclova_prompt_strips_hex_codes_from_colors():
     assert "#f5f0e6" not in prompt.lower()
     assert "#eae3d2" not in prompt.lower()
     assert "case" in prompt  # 색 이름 자체는 유지
+
+
+# ── 설정값 정밀 그라운딩(2026-06-15): 배열 행 구조 + 키캡 프로파일 기하 (배열 붕괴/체리 높이 교정) ──
+def test_hyperclova_prompt_grounds_layout_rows_and_keycap_profile():
+    p65 = _hyperclova_prompt(layout="65", keycap_profile="cherry").lower()
+    assert "5 ansi-staggered rows" in p65 and "right-side arrow cluster" in p65
+    assert "sculpted" in p65 and "home row lowest" in p65  # Cherry는 행마다 높이가 다름
+    # 풀배열(104)은 numpad 포함, XDA는 균일(no sculpt)로 갈려야 — 설정값이 실제로 반영됨
+    assert "number pad" in _hyperclova_prompt(layout="104").lower()
+    assert "every row is the same medium height" in _hyperclova_prompt(keycap_profile="xda").lower()

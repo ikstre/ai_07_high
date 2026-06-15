@@ -126,7 +126,9 @@ def test_top_down_mouse_marker_is_rounded_and_detailed():
 # ── 채널 → 구도(shot_type) 해석 (투영 선택 근거) ──────────────────────────
 def test_resolve_shot_type_by_channel_and_override():
     assert ai._resolve_shot_type({"target_channel": "인스타그램"}) == "top_down"
+    # 제품 진열형 채널은 hero(3-4) 기본 — top_down은 Omni가 정면 입면으로 떨어져 회귀(2026-06-15 라이브 검증)
     assert ai._resolve_shot_type({"target_channel": "스마트스토어"}) == "hero"
+    assert ai._resolve_shot_type({"target_channel": "상세페이지"}) == "hero"
     assert ai._resolve_shot_type({"target_channel": "배너 광고"}) == "wide_scene"
     # 명시 shot_type이 채널 기본값보다 우선
     assert ai._resolve_shot_type({"target_channel": "인스타그램", "shot_type": "hero"}) == "hero"
