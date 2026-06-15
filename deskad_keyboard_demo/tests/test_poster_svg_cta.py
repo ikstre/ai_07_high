@@ -63,6 +63,37 @@ def test_grid_three_accepts_three_generated_images():
     assert 'preserveAspectRatio="xMaxYMid slice"' not in svg
 
 
+def _hero_box(svg: str) -> tuple[int, int]:
+    """meet로 배치된 히어로 <image>의 (width, height)를 반환."""
+    m = re.search(
+        r'<image href="data:image/png[^"]*" x="\d+" y="\d+" width="(\d+)" height="(\d+)" '
+        r'preserveAspectRatio="xMidYMid meet"',
+        svg,
+    )
+    assert m, "히어로 image 태그를 찾지 못함"
+    return int(m.group(1)), int(m.group(2))
+
+
+def test_minimal_card_hero_frame_matches_square_image_no_band():
+    # 1:1 이미지는 정사각 프레임(width==height) → meet 레터박스(좌우 베이지 띠) 없음.
+    svg = create_svg_poster(_payload("minimal_card", "1:1"), _copy(), image_b64="AAAA")
+    w, h = _hero_box(svg)
+    assert w == h, f"정사각이어야 하는데 {w}x{h} (좌우 여백 띠 발생)"
+
+
+def test_minimal_card_hero_frame_matches_wide_ratio():
+    # 16:9 이미지는 프레임도 16:9(가로>세로) → 비율 불일치로 인한 띠 없음.
+    svg = create_svg_poster(_payload("minimal_card", "16:9"), _copy(), image_b64="AAAA")
+    w, h = _hero_box(svg)
+    assert abs(w / h - 16 / 9) < 0.02, f"16:9 프레임이어야 하는데 {w}x{h}"
+
+
+def test_promo_banner_hero_frame_matches_wide_ratio_no_band():
+    svg = create_svg_poster(_payload("promo_banner", "16:9"), _copy(), image_b64="AAAA")
+    w, h = _hero_box(svg)
+    assert abs(w / h - 16 / 9) < 0.02, f"16:9 프레임이어야 하는데 {w}x{h}"
+
+
 def test_wrap_force_breaks_spaceless_long_headline_within_width():
     # 공백 없는 긴 한글 headline(A5): break_long_words=False만으론 한 줄로 남아 캔버스
     # 밖으로 넘쳤다. 폭 가드가 글자수 기준으로 강제 분할해 모든 줄이 width 이하여야 한다.
