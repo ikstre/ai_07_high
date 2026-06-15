@@ -10,6 +10,7 @@ import textwrap
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlencode, urlparse
 from uuid import uuid4
 
@@ -1569,6 +1570,9 @@ def build_image_prompt(payload: dict, copy_result: dict) -> str:
 
 PosterImageInput = str | list[str] | tuple[str, ...] | None
 
+# (done_shots, total_shots, ok_images) — grid 분할 생성 진행을 job message로 중계.
+ImageProgressCallback = Callable[[int, int, int], None]
+
 
 def _poster_image_list(image_b64: PosterImageInput) -> list[str]:
     if isinstance(image_b64, str):
@@ -2253,18 +2257,21 @@ def _hyperclova_native_image_prompt(payload: dict, image_prompt: str) -> str:
         if asset and str(asset) not in {"keyboard", "desk"}
     ][:4]
     asset_clause = ", ".join(assets) if assets else "no extra accessories"
-    colors = ", ".join(
-        part
-        for part in (
-            f"case {describe_color(payload.get('case_color'))}",
-            f"keycaps {describe_color(payload.get('keycap_color'))}",
-            f"accent keycaps {describe_color(payload.get('accent_keycap_color'))}",
-        )
-        if part and "None" not in part
-    )
-    # describe_color는 "ivory off-white (#f5f0e6)"처럼 hex를 병기한다. Omni는
-    # prompt 속 문자열을 이미지에 그대로 echo하는 경향이 있어 hex 표기는 제거.
-    colors = re.sub(r"\s*\(#[0-9a-fA-F]{3,8}\)", "", colors)
+    color_parts: list[str] = []
+    for color_label, color_key in (
+        ("case", "case_color"),
+        ("keycaps", "keycap_color"),
+        ("accent keycaps", "accent_keycap_color"),
+    ):
+        described = describe_color(payload.get(color_key))
+        # describe_color는 "ivory off-white (#f5f0e6)"처럼 hex를 병기한다. Omni는
+        # prompt 속 문자열을 이미지에 그대로 echo하는 경향이 있어 hex 표기는 제거.
+        # 빈 색상은 통째로 제외 — "case , keycaps ," 같은 깨진 절이 prompt에
+        # 들어가는 것을 막는다(2026-06-12 QA 3 조사 중 발견).
+        described = re.sub(r"\s*\(#[0-9a-fA-F]{3,8}\)", "", described).strip()
+        if described and "None" not in described:
+            color_parts.append(f"{color_label} {described}")
+    colors = ", ".join(color_parts)
     prompt = (
         f"Create one photorealistic Korean ecommerce product image of {product}, "
         f"a {layout_label}. Camera: {comp['angle']}; {comp['framing']}; {comp['lens']}. "
@@ -2292,58 +2299,115 @@ def _build_hyperclova_openai_images_payload(payload: dict, image_prompt: str) ->
     }
 
 
-def _hyperclova_openai_images_reference(payload: dict, image_prompt: str) -> dict:
+def _hyperclova_openai_images_call(request_payload: dict) -> dict:
+    """단일 /images/generations 호출. response_format 미지원 서버는 한 번 재시도한다."""
     settings = get_settings()
-    model = _hyperclova_image_model()
-    request_payload = _build_hyperclova_openai_images_payload(payload, image_prompt)
+    url = _images_generations_url(settings.effective_hyperclova_image_base_url)
+    headers = _auth_headers(settings.effective_hyperclova_image_api_key)
     try:
-        result = _request_json(
-            _images_generations_url(settings.effective_hyperclova_image_base_url),
-            headers=_auth_headers(settings.effective_hyperclova_image_api_key),
-            payload=request_payload,
-            timeout=_hyperclova_image_timeout_seconds(),
+        return _request_json(
+            url, headers=headers, payload=request_payload, timeout=_hyperclova_image_timeout_seconds()
         )
     except requests.HTTPError as exc:
         response_text = getattr(exc.response, "text", "") if getattr(exc, "response", None) is not None else ""
         if "response_format" not in response_text:
-            return {
-                "provider": "hyperclova_image",
-                "mode": "openai_images",
-                "model": model,
-                "error": f"{exc}: {response_text[:700]}" if response_text else str(exc),
-                "has_image": False,
-            }
+            raise
+        retry_payload = {key: value for key, value in request_payload.items() if key != "response_format"}
+        return _request_json(
+            url, headers=headers, payload=retry_payload, timeout=_hyperclova_image_timeout_seconds()
+        )
+
+
+def _hyperclova_request_error_text(exc: Exception) -> str:
+    response_text = getattr(exc.response, "text", "") if getattr(exc, "response", None) is not None else ""
+    return f"{exc}: {response_text[:700]}" if response_text else str(exc)
+
+
+def _hyperclova_grid_three_reference(
+    payload: dict, image_prompt: str, *, on_progress: ImageProgressCallback | None = None
+) -> dict:
+    """grid_three 3컷을 컷당 1장씩 분할 요청으로 생성한다.
+
+    Omni 네이티브 생성은 장당 ~280s라 n=3 단일 요청은 클라이언트 타임아웃(420s)을
+    구조적으로 초과한다(next_work 2026-06-12 0순위). 컷별 분할로 요청마다 독립
+    타임아웃을 갖고, shot_plan의 구도를 프롬프트에 반영해 컷 차별화도 얻는다.
+    일부 컷 실패는 허용 — 템플릿 SVG가 부족분을 메인 컷으로 대체한다.
+    """
+    model = _hyperclova_image_model()
+    width, height = _image_dimensions(payload)
+    size = f"{width}x{height}" if width == height else "1024x1024"
+    shots = _grid_three_shot_plan(payload)
+    image_b64s: list[str] = []
+    shot_results: list[dict] = []
+    errors: list[str] = []
+    for index, shot in enumerate(shots):
+        # shot_plan의 shot_type은 _COMPOSITION_TEMPLATES 키와 일치 → 컷별 카메라
+        # 지시가 네이티브 프롬프트에 그대로 반영된다.
+        shot_payload = {**payload, "shot_type": shot["shot_type"]}
+        shot_prompt = _hyperclova_native_image_prompt(shot_payload, image_prompt)
+        shot_prompt = (
+            sanitize_user_text(f"{shot_prompt} Panel focus: {shot['instruction']}.", limit=1500) or shot_prompt
+        )
+        # 실패가 프롬프트 내용에 종속되는 패턴(2026-06-12 QA 3)이라, 실패 잡을
+        # 사후 비교할 수 있게 실제 전송 프롬프트 머리를 기록한다.
+        shot_record: dict = {"id": shot["id"], "label": shot["label"], "prompt_preview": shot_prompt[:240]}
         try:
-            request_payload.pop("response_format", None)
-            result = _request_json(
-                _images_generations_url(settings.effective_hyperclova_image_base_url),
-                headers=_auth_headers(settings.effective_hyperclova_image_api_key),
-                payload=request_payload,
-                timeout=_hyperclova_image_timeout_seconds(),
+            result = _hyperclova_openai_images_call(
+                {"model": model, "prompt": shot_prompt, "size": size, "n": 1, "response_format": "b64_json"}
             )
-        except Exception as retry_exc:
-            retry_response_text = (
-                getattr(retry_exc.response, "text", "")
-                if getattr(retry_exc, "response", None) is not None
-                else ""
-            )
-            return {
-                "provider": "hyperclova_image",
-                "mode": "openai_images",
-                "model": model,
-                "error": f"{retry_exc}: {retry_response_text[:700]}" if retry_response_text else str(retry_exc),
-                "has_image": False,
-            }
+            shot_b64s = _decode_local_images_to_b64(result, limit=1)
+        except Exception as exc:
+            shot_b64s = []
+            shot_record["error"] = _hyperclova_request_error_text(exc)
+            errors.append(f"{shot['id']}: {shot_record['error']}")
+        shot_record["ok"] = bool(shot_b64s)
+        shot_results.append(shot_record)
+        image_b64s.extend(shot_b64s)
+        if on_progress:
+            on_progress(index + 1, len(shots), len(image_b64s))
+    summary: dict = {
+        "provider": "hyperclova_image",
+        "mode": "openai_images",
+        "model": model,
+        "has_image": bool(image_b64s),
+        "requested_image_count": len(shots),
+        "image_count": len(image_b64s),
+        "shot_results": shot_results,
+    }
+    if image_b64s:
+        summary["image_b64"] = image_b64s[0]
+        if len(image_b64s) > 1:
+            summary["image_b64s"] = image_b64s
+    if errors:
+        summary["shot_errors"] = errors
+        if not image_b64s:
+            summary["error"] = "; ".join(errors)[:1400]
+    return summary
+
+
+def _hyperclova_openai_images_reference(
+    payload: dict, image_prompt: str, *, on_progress: ImageProgressCallback | None = None
+) -> dict:
+    model = _hyperclova_image_model()
+    requested_count = _image_count_for_payload(payload)
+    if requested_count > 1 and payload.get("poster_template") == "grid_three":
+        return _hyperclova_grid_three_reference(payload, image_prompt, on_progress=on_progress)
+    request_payload = _build_hyperclova_openai_images_payload(payload, image_prompt)
+    # 실패가 프롬프트 내용에 종속되는 패턴(2026-06-12 QA 3) — prompt_preview(ComfyUI용)와
+    # 별개로, Omni에 실제 전송한 native prompt 머리를 잡 기록에 남겨 사후 비교를 가능하게 한다.
+    native_prompt_preview = str(request_payload.get("prompt") or "")[:240]
+    try:
+        result = _hyperclova_openai_images_call(request_payload)
     except Exception as exc:
         return {
             "provider": "hyperclova_image",
             "mode": "openai_images",
             "model": model,
-            "error": str(exc),
+            "error": _hyperclova_request_error_text(exc),
             "has_image": False,
+            "native_prompt_preview": native_prompt_preview,
         }
 
-    requested_count = _image_count_for_payload(payload)
     image_b64s = _decode_local_images_to_b64(result, limit=requested_count)
     summary: dict = {
         "provider": "hyperclova_image",
@@ -2352,6 +2416,7 @@ def _hyperclova_openai_images_reference(payload: dict, image_prompt: str) -> dic
         "has_image": bool(image_b64s),
         "requested_image_count": requested_count,
         "image_count": len(image_b64s),
+        "native_prompt_preview": native_prompt_preview,
     }
     if image_b64s:
         summary["image_b64"] = image_b64s[0]
@@ -2596,7 +2661,9 @@ def _hyperclova_omni_chat_reference(payload: dict, image_prompt: str) -> dict:
     }
 
 
-def generate_hyperclova_image_reference(payload: dict, image_prompt: str) -> dict | None:
+def generate_hyperclova_image_reference(
+    payload: dict, image_prompt: str, *, on_progress: ImageProgressCallback | None = None
+) -> dict | None:
     settings = get_settings()
     model = _hyperclova_image_model()
     if reason := _hyperclova_image_not_configured_reason():
@@ -2610,7 +2677,7 @@ def generate_hyperclova_image_reference(payload: dict, image_prompt: str) -> dic
         }
     mode = _hyperclova_image_mode()
     if mode == "openai_images":
-        return _hyperclova_openai_images_reference(payload, image_prompt)
+        return _hyperclova_openai_images_reference(payload, image_prompt, on_progress=on_progress)
     if mode == "omniserve_chat":
         return _hyperclova_omni_chat_reference(payload, image_prompt)
     return {
@@ -3131,15 +3198,41 @@ def _submit_comfyui_job(job: dict, payload: dict, image_prompt: str) -> dict:
 
 # 백엔드 재시작 등으로 _run_hyperclova_image_job thread가 죽으면 job이 영원히
 # running으로 남아 UI 폴링과 exclusive 워커 stop 가드를 붙잡는다. 클라이언트
-# timeout(기본 420s) + grace를 넘긴 running job은 poll 시점에 failed로 종결한다.
+# timeout(기본 420s) × 요청 장수 + grace를 넘긴 running job은 poll 시점에
+# failed로 종결한다. grid_three는 컷별 분할 요청이라 장수만큼 예산이 커진다.
 _HYPERCLOVA_JOB_STALE_GRACE_SECONDS = 120
+# 큐 대기 thread가 죽으면(queued_heartbeat 갱신 중단) poll 시점에 failed로 종결.
+_HYPERCLOVA_QUEUED_HEARTBEAT_STALE_SECONDS = 90
+# 이미지 서버(:11602)는 요청을 내부 lock으로 직렬 처리한다. 앞 job이 생성 중일 때
+# 새 job이 바로 HTTP를 보내면 큐 대기 시간이 클라이언트 타임아웃(420s×n)을 잠식해
+# 두 번째 job이 구조적으로 실패한다(구도 변경 후 재생성 실패, 2026-06-12 QA).
+# 백엔드에서 먼저 줄을 세우고, 차례가 오면 created_at을 리셋해 stale 예산이
+# 실제 생성 시간만 재게 한다.
+_HYPERCLOVA_IMAGE_JOB_LOCK = threading.Lock()
 
 
 def _fail_stale_hyperclova_job(job: dict) -> dict:
-    if job.get("provider") != "hyperclova_image" or job.get("status") != "running":
+    if job.get("provider") != "hyperclova_image" or job.get("status") not in {"queued", "running"}:
         return job
+    if job.get("status") == "queued":
+        heartbeat = job.get("queued_heartbeat") or job.get("created_at") or 0
+        if time.time() - heartbeat <= _HYPERCLOVA_QUEUED_HEARTBEAT_STALE_SECONDS:
+            return job
+        job.update(
+            {
+                "status": "failed",
+                "error": "hyperclova image job stale: queued waiter thread lost (backend restarted?)",
+                "completed_at": int(time.time()),
+            }
+        )
+        return IMAGE_JOB_STORE.save(job)
     age = time.time() - (job.get("created_at") or 0)
-    if age <= _hyperclova_image_timeout_seconds() + _HYPERCLOVA_JOB_STALE_GRACE_SECONDS:
+    try:
+        image_count = max(1, int(job.get("requested_image_count") or 1))
+    except (TypeError, ValueError):
+        image_count = 1
+    budget = _hyperclova_image_timeout_seconds() * image_count + _HYPERCLOVA_JOB_STALE_GRACE_SECONDS
+    if age <= budget:
         return job
     job.update(
         {
@@ -3212,14 +3305,51 @@ def _run_hyperclova_image_job(job_id: str, payload: dict, image_prompt: str) -> 
     exclusive 환경에서 :11602 서버 적재를 보장한다.
     """
     job = IMAGE_JOB_STORE.get(job_id) or {"job_id": job_id, "provider": "hyperclova_image"}
+
+    def on_progress(done: int, total: int, ok: int) -> None:
+        # grid 분할 생성의 컷별 완료를 폴링 UI가 볼 수 있게 message로 남긴다.
+        current = IMAGE_JOB_STORE.get(job_id) or job
+        if current.get("status") != "running":
+            return
+        current["message"] = f"3컷 순차 생성 중 — {done}/{total}컷 시도, {ok}장 완료"
+        IMAGE_JOB_STORE.save(current)
+
+    acquired_immediately = _HYPERCLOVA_IMAGE_JOB_LOCK.acquire(blocking=False)
+    if not acquired_immediately:
+        # 앞 job이 생성 중 — HTTP를 보내지 않고 백엔드에서 대기(queued).
+        # 대기 중 heartbeat를 갱신해 thread 생존을 poll 쪽 stale 판정에 알린다.
+        job.update(
+            {
+                "status": "queued",
+                "message": "앞선 이미지 작업이 끝나면 자동으로 시작됩니다",
+                "queued_heartbeat": int(time.time()),
+            }
+        )
+        IMAGE_JOB_STORE.save(job)
+        while not _HYPERCLOVA_IMAGE_JOB_LOCK.acquire(timeout=15):
+            current = IMAGE_JOB_STORE.get(job_id) or job
+            if current.get("status") != "queued":
+                # poll 쪽 stale 판정 등으로 외부에서 종결됨 — 조용히 물러난다.
+                return
+            current["queued_heartbeat"] = int(time.time())
+            IMAGE_JOB_STORE.save(current)
     try:
+        # 차례가 온 시점부터 stale 예산이 실제 생성 시간만 재도록 created_at 리셋.
+        job = IMAGE_JOB_STORE.get(job_id) or job
+        job.pop("message", None)
+        job.pop("queued_heartbeat", None)
+        job.update({"status": "running", "created_at": int(time.time())})
+        job = IMAGE_JOB_STORE.save(job)
+
         from .runtime_workers import ensure_hyperclova_image_worker
 
         ensure_hyperclova_image_worker()
-        reference = generate_hyperclova_image_reference(payload, image_prompt)
+        reference = generate_hyperclova_image_reference(payload, image_prompt, on_progress=on_progress)
         status = "completed" if isinstance(reference, dict) and reference.get("has_image") else "failed"
         if isinstance(reference, dict) and reference.get("not_configured"):
             status = "not_configured"
+        job = IMAGE_JOB_STORE.get(job_id) or job
+        job.pop("message", None)
         job.update(
             {
                 "status": status,
@@ -3228,7 +3358,10 @@ def _run_hyperclova_image_job(job_id: str, payload: dict, image_prompt: str) -> 
             }
         )
     except Exception as exc:
+        job.pop("message", None)
         job.update({"status": "failed", "error": str(exc), "completed_at": int(time.time())})
+    finally:
+        _HYPERCLOVA_IMAGE_JOB_LOCK.release()
     saved_job = IMAGE_JOB_STORE.save(job)
     _cache_completed_image_job(saved_job)
 
@@ -3294,7 +3427,14 @@ def create_image_job(payload: dict, image_prompt: str, *, force_regen: bool = Fa
                 }
             )
         else:
-            job.update({"provider": "hyperclova_image", "status": "running"})
+            job.update(
+                {
+                    "provider": "hyperclova_image",
+                    "status": "running",
+                    # stale 판정(_fail_stale_hyperclova_job)이 장수 기반 예산을 쓰도록 기록.
+                    "requested_image_count": _image_count_for_payload(payload),
+                }
+            )
             IMAGE_JOB_STORE.save(job)
             threading.Thread(
                 target=_run_hyperclova_image_job,

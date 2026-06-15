@@ -8,6 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from .api_client import api_post, fetch_binary_data_url
+from .progress import run_with_live_progress
 
 def render_model_viewer(model_url: str, height: int = 720, camera: str | None = None) -> None:
     camera_param = camera or st.session_state.camera
@@ -82,14 +83,29 @@ def build_render_payload() -> dict:
         "monitor_arm_style": st.session_state.monitor_arm_style,
     }
 
-def render_desk_setup() -> None:
-    data = api_post("/render/desk-setup", build_render_payload(), timeout=30)
+def _apply_desk_setup_result(data: dict) -> None:
     st.session_state.model_url = data["model_url"]
     st.session_state.model_meta = data
     # 셋업 구도 맵: img2img가 실제 배치(마우스 1개·구성품 위치)를 따르도록 보관.
     # 원근/탑다운 두 투영을 모두 저장 → 백엔드가 채널 앵글에 맞게 고른다.
     st.session_state.setup_composition_b64 = data.get("composition_b64")
     st.session_state.setup_composition_topdown_b64 = data.get("composition_topdown_b64")
+
+
+def render_desk_setup() -> None:
+    _apply_desk_setup_result(api_post("/render/desk-setup", build_render_payload(), timeout=30))
+
+
+def render_desk_setup_live(slot) -> None:
+    """버튼 슬롯을 실시간 게이지로 바꿔가며 셋업을 생성한다(payload/적용은 메인 스레드)."""
+    payload = build_render_payload()
+    data = run_with_live_progress(
+        slot,
+        lambda: api_post("/render/desk-setup", payload, timeout=30),
+        label="3D 데스크 셋업 생성 중",
+        expected_seconds=8,
+    )
+    _apply_desk_setup_result(data)
 
 def upload_reference_model(uploaded_file) -> None:
     raw = uploaded_file.getvalue()

@@ -423,7 +423,12 @@ def _hyperclova_image_busy() -> bool:
             continue
         if record.get("status") not in {"created", "queued", "running"}:
             continue
-        if now - int(record.get("created_at") or 0) > 900:
+        # grid 3컷은 컷별 순차 생성이라 정상 작업이 900s를 넘는다 — 장수만큼 예산 확대.
+        try:
+            image_count = max(1, int(record.get("requested_image_count") or 1))
+        except (TypeError, ValueError):
+            image_count = 1
+        if now - int(record.get("created_at") or 0) > 900 * image_count:
             continue  # stale 좀비 — 죽은 job으로 간주
         return True
     return False

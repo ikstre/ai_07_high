@@ -12,7 +12,9 @@ Single NVIDIA L4 (22GB) recipe, verified 2026-06-10:
     excluded via a one-time extraction (see HYPERCLOVA_OMNI_LLM_DIR).
   * Greedy decoding collapses the tokens (few unique -> low detail); temperature
     1.0 breaks the block. temperature=0.7/top_p=0.9 is the sweet spot.
-  * Decoder: num_inference_steps=50, guidance_scale=0.75 (transformer2 autoguidance).
+  * Decoder: num_inference_steps=30, guidance_scale=0.75 (transformer2 autoguidance).
+    steps 50→30 saves ~40s/image with no visible quality change (A/B 2026-06-13,
+    same token block decoded at both settings).
 
 Exposes POST /v1/images/generations (and /images/generations) returning
 {"data": [{"b64_json": "<png>"}]}, plus GET /health. Mutually exclusive on VRAM
@@ -79,7 +81,7 @@ MODEL_ID = os.getenv("HYPERCLOVA_IMAGE_MODEL", "hyperclovax-omni-image")
 MAX_NEW_TOKENS = int(os.getenv("HYPERCLOVA_OMNI_IMAGE_MAX_NEW_TOKENS", "900"))
 TEMPERATURE = float(os.getenv("HYPERCLOVA_OMNI_IMAGE_TEMPERATURE", "0.7"))
 TOP_P = float(os.getenv("HYPERCLOVA_OMNI_IMAGE_TOP_P", "0.9"))
-STEPS = int(os.getenv("HYPERCLOVA_OMNI_IMAGE_STEPS", "50"))
+STEPS = int(os.getenv("HYPERCLOVA_OMNI_IMAGE_STEPS", "30"))
 GUIDANCE = float(os.getenv("HYPERCLOVA_OMNI_IMAGE_GUIDANCE", "0.75"))
 # Sampling is stochastic and occasionally fails to emit the full 729-token block;
 # retry with a fresh seed until a valid block appears. Early-aborted attempts cost
@@ -94,6 +96,14 @@ TIME_BUDGET = float(os.getenv("HYPERCLOVA_OMNI_IMAGE_TIME_BUDGET_SECONDS", "140"
 # t2i tool; measured cost is 80-180s each. The tool-call header shows up within the
 # first few dozen tokens, so abort as soon as it is absent. 0 disables the check.
 TOOLCALL_CHECK_TOKENS = int(os.getenv("HYPERCLOVA_OMNI_IMAGE_TOOLCALL_CHECK_TOKENS", "48"))
+# Whether to PREFILL the assistant turn with the tool-call header so the model never
+# faces the "tool vs plain text" branch at all. Observed 2026-06-12: near-identical
+# prompts flip between 1/1 success and 12/12 early-abort in the same warm process —
+# the failure is the model choosing the text path, deterministically per (prompt,
+# seed). Prefilling removes that choice; the model only has to fill in the 729
+# vision tokens. Saves up to TIME_BUDGET (~140s) of wasted attempts per request.
+PREFILL_TOOLCALL = os.getenv("HYPERCLOVA_OMNI_IMAGE_PREFILL_TOOLCALL", "1").strip().lower() in {"1", "true", "yes", "on"}
+TOOLCALL_PREFILL_TEXT = "<tool_call>t2i_model_generation\n<arg_key>discrete_image_token</arg_key>\n<arg_value>"
 
 import logging  # noqa: E402
 
@@ -157,8 +167,8 @@ def _load():
 lm, tokenizer, decoder = _load()
 
 
-def _build_prompt(user_prompt: str) -> str:
-    return (
+def _build_prompt(user_prompt: str, prefill: bool = False) -> str:
+    base = (
         "<|im_start|>system\n" + SYSTEM_PROMPT + "\n\n# Tools\n\n"
         "You may call one or more functions to assist with the user query.\n\n"
         "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n"
@@ -169,6 +179,9 @@ def _build_prompt(user_prompt: str) -> str:
         "<|im_start|>user\n" + user_prompt + "<|im_end|>\n"
         "<|im_start|>assistant\n<think>\n\n</think>\n\n"
     )
+    if prefill:
+        base += TOOLCALL_PREFILL_TEXT
+    return base
 
 
 def _ratio_to_res(w: int, h: int) -> tuple[int, int]:
@@ -181,8 +194,9 @@ def _ratio_to_res(w: int, h: int) -> tuple[int, int]:
 class _AbortIfNoToolCall(StoppingCriteria):
     """Stop generation early when the first tokens are clearly not a tool call."""
 
-    def __init__(self, prompt_len: int):
+    def __init__(self, prompt_len: int, marker: str = "<tool_call>"):
         self.prompt_len = prompt_len
+        self.marker = marker
         self.aborted = False
         self._checked = False
 
@@ -194,15 +208,19 @@ class _AbortIfNoToolCall(StoppingCriteria):
             return False
         self._checked = True
         text = tokenizer.decode(generated, skip_special_tokens=False)
-        self.aborted = "<tool_call>" not in text
+        self.aborted = self.marker not in text
         return self.aborted
 
 
-def _emit_tokens(user_prompt: str, seed: int) -> tuple[np.ndarray, int, int] | None:
+def _emit_tokens(user_prompt: str, seed: int, prefill: bool = PREFILL_TOOLCALL) -> tuple[np.ndarray, int, int] | None:
     """Run the LLM once; return (729 tokens, width, height) or None if the block is incomplete."""
     torch.manual_seed(seed)
-    enc = tokenizer(_build_prompt(user_prompt), return_tensors="pt").to("cuda")
-    abort = _AbortIfNoToolCall(enc["input_ids"].shape[-1])
+    enc = tokenizer(_build_prompt(user_prompt, prefill=prefill), return_tensors="pt").to("cuda")
+    # With the prefilled header the tool-call tag lives in the prompt, so the early
+    # check must look for the vision-token block itself instead.
+    abort = _AbortIfNoToolCall(
+        enc["input_ids"].shape[-1], marker="<|vision" if prefill else "<tool_call>"
+    )
     with torch.no_grad():
         out = lm.generate(
             **enc, max_new_tokens=MAX_NEW_TOKENS, do_sample=True,
@@ -211,7 +229,7 @@ def _emit_tokens(user_prompt: str, seed: int) -> tuple[np.ndarray, int, int] | N
             stopping_criteria=StoppingCriteriaList([abort]),
         )
     if abort.aborted:
-        logger.info("seed=%d -> early abort: no <tool_call> within %d tokens", seed, TOOLCALL_CHECK_TOKENS)
+        logger.info("seed=%d -> early abort: no %r within %d tokens", seed, abort.marker, TOOLCALL_CHECK_TOKENS)
         return None
     text = tokenizer.decode(out[0][enc["input_ids"].shape[-1]:], skip_special_tokens=False)
     vis = [int(x) for x in _VISION_RE.findall(text)]
@@ -264,7 +282,10 @@ def health() -> dict[str, Any]:
         "model": MODEL_ID,
         "llm_dir": LLM_DIR,
         "supports": {"text": False, "image_input": False, "image_output": True},
-        "params": {"temperature": TEMPERATURE, "top_p": TOP_P, "steps": STEPS, "guidance": GUIDANCE},
+        "params": {
+            "temperature": TEMPERATURE, "top_p": TOP_P, "steps": STEPS, "guidance": GUIDANCE,
+            "prefill_toolcall": PREFILL_TOOLCALL,
+        },
     }
 
 
@@ -273,6 +294,10 @@ def health() -> dict[str, Any]:
 def images_generations(req: ImageRequest) -> dict[str, Any]:
     if not req.prompt.strip():
         raise HTTPException(status_code=400, detail="prompt must not be empty")
+    # 실패(조기중단/vision_tokens=0)가 seed가 아니라 프롬프트 내용에 종속되는
+    # 패턴이 관측됨(2026-06-12) — 실패 클러스터를 프롬프트와 대조할 수 있게
+    # 요청 시점에 프롬프트 길이와 머리를 남긴다.
+    logger.info("request: n=%d prompt_len=%d prompt_head=%r", req.n, len(req.prompt), req.prompt[:160])
     # A fixed base seed makes failures deterministic: a prompt that misses the
     # token block on its retry seeds will fail identically on every resubmit.
     # Default to a random seed; accept an explicit one for reproducibility.

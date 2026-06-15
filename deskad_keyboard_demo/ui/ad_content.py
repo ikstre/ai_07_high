@@ -10,6 +10,7 @@ import streamlit as st
 from .api_client import api_get, api_post
 from .constants import IMAGE_JOB_TERMINAL_STATUSES, POSTER_TEMPLATE_LABELS, PROVIDER_LABELS
 from .formatting import format_price_display
+from .progress import run_with_live_progress
 from .rendering import build_render_payload
 
 def current_image_job_id() -> str | None:
@@ -33,6 +34,10 @@ def poster_waiting_for_image() -> bool:
     if not st.session_state.image_polling_enabled:
         return False
     return bool(st.session_state.image_job_result) and image_job_is_pending()
+
+def has_completed_image_job() -> bool:
+    """완료된 실사 이미지 작업이 있는지 — 포스터 생성 순서 강제(2026-06-12 QA)에 사용."""
+    return current_image_job_id() is not None
 
 def build_ad_payload() -> dict:
     payload = {
@@ -164,23 +169,62 @@ def generate_copy_experiment() -> None:
     st.session_state.copy_selected_provider = provider
 
 
-def generate_copy_variants() -> None:
-    # 선택한 엔진에서 문구 변형 3-4개를 뽑아 나란히 비교/선택한다(로컬처럼 모델 결과로 고른다).
-    st.session_state.copy_experiment_result = api_post(
-        "/ai/copy/variants", build_ad_payload(), timeout=400
-    )
-    provider, selected = first_successful_copy(st.session_state.copy_experiment_result)
+def _apply_copy_variants_result(data: dict) -> None:
+    st.session_state.copy_experiment_result = data
+    provider, selected = first_successful_copy(data)
     st.session_state.copy_result = selected
     st.session_state.copy_selected_provider = provider
+
+
+def generate_copy_variants() -> None:
+    # 선택한 엔진에서 문구 변형 3-4개를 뽑아 나란히 비교/선택한다(로컬처럼 모델 결과로 고른다).
+    _apply_copy_variants_result(api_post("/ai/copy/variants", build_ad_payload(), timeout=400))
+
+
+def generate_copy_variants_live(slot) -> None:
+    """버튼 슬롯을 실시간 게이지로 바꿔가며 문구 변형을 생성한다."""
+    payload = build_ad_payload()
+    # hyperclova 트랙은 GPU 워커 교체(~110s)가 겹칠 수 있어 기준선을 엔진별로 둔다.
+    expected = {"hyperclova": 150, "local": 60, "openai": 30}.get(
+        str(st.session_state.get("engine") or ""), 90
+    )
+    data = run_with_live_progress(
+        slot,
+        lambda: api_post("/ai/copy/variants", payload, timeout=400),
+        label="광고 문구 생성 중",
+        expected_seconds=expected,
+    )
+    _apply_copy_variants_result(data)
+
+
+def _apply_poster_result(data: dict) -> None:
+    st.session_state.poster_result = data
+    st.session_state.copy_result = data["copy"]
+    st.session_state.copy_selected_provider = data["copy"].get("provider")
+
 
 def generate_poster(include_completed_image: bool = True) -> None:
     payload = build_ad_payload()
     if not include_completed_image:
         payload["image_job_id"] = None
-    data = api_post("/ai/poster", payload, timeout=300)
-    st.session_state.poster_result = data
-    st.session_state.copy_result = data["copy"]
-    st.session_state.copy_selected_provider = data["copy"].get("provider")
+    _apply_poster_result(api_post("/ai/poster", payload, timeout=300))
+
+
+def generate_poster_live(slot, include_completed_image: bool = True) -> None:
+    """버튼 슬롯을 실시간 게이지로 바꿔가며 포스터를 생성한다."""
+    payload = build_ad_payload()
+    if not include_completed_image:
+        payload["image_job_id"] = None
+    # 문구가 이미 선택돼 있으면 SVG 합성 위주(빠름), 아니면 copy 생성이 포함된다.
+    expected = 20 if payload.get("selected_copy") else 90
+    data = run_with_live_progress(
+        slot,
+        lambda: api_post("/ai/poster", payload, timeout=300),
+        label="포스터 생성 중",
+        expected_seconds=expected,
+    )
+    _apply_poster_result(data)
+
 
 def generate_image_job(force_regen: bool = False) -> dict:
     # force_regen=True는 캐시를 건너뛰고 같은 조건으로 새로 생성한다(결과 불만족 시
@@ -238,7 +282,13 @@ def auto_poll_image_job() -> None:
         started_at = time.time()
         st.session_state.image_poll_started_at = started_at
     elapsed = time.time() - started_at
-    timeout = int(st.session_state.image_poll_timeout_seconds)
+    # grid 3컷처럼 여러 장을 순차 생성하는 job은 장수만큼 대기 예산을 늘린다
+    # (backend stale 판정과 같은 산식 — 기본 600s로는 3컷 ~840s+를 못 기다린다).
+    try:
+        image_count = max(1, int(job.get("requested_image_count") or 1))
+    except (TypeError, ValueError):
+        image_count = 1
+    timeout = int(st.session_state.image_poll_timeout_seconds) * image_count
     if elapsed > timeout:
         st.session_state.image_polling_enabled = False
         st.session_state.image_poll_started_at = None
@@ -248,11 +298,13 @@ def auto_poll_image_job() -> None:
 
     # 엔진별 통상 소요(초). 정확한 ETA가 아니라 "얼마나 기다리는 게 정상인지"의
     # 기준선 — 게이지는 97%에서 멈춰 완료를 단정하지 않는다(2026-06-11 이미지 QA).
-    expected = {"hyperclova_image": 420, "comfyui": 120, "openai_image": 90}.get(
+    # hyperclova: prefill + steps 30 적용 후 warm 장당 ~230s, 워커 적재 포함 ~300s
+    # (2026-06-13 GPU A/B 실측).
+    expected = {"hyperclova_image": 300, "comfyui": 120, "openai_image": 90}.get(
         str(job.get("provider") or ""), 180
-    )
+    ) * image_count
     status_slot = st.empty()
-    with status_slot.container():
+    with status_slot.container(border=True):
         st.progress(
             min(elapsed / expected, 0.97),
             text=(
@@ -260,6 +312,8 @@ def auto_poll_image_job() -> None:
                 f"{int(elapsed)}초 경과 (이 엔진은 보통 ~{expected}초)"
             ),
         )
+        if job.get("message"):
+            st.caption(str(job["message"]))
         if job.get("provider") == "hyperclova_image":
             st.caption("HyperCLOVA 이미지는 GPU 모델 적재가 겹치면 최대 7분까지 걸릴 수 있어요. 완료되면 결과 영역에 자동 반영됩니다.")
     try:
@@ -274,11 +328,23 @@ def auto_poll_image_job() -> None:
     if updated.get("status") == "completed":
         st.session_state.image_polling_enabled = False
         st.session_state.image_poll_started_at = None
-        st.success("이미지 작업 완료. 포스터 생성에 자동으로 연결됩니다.")
+        if st.session_state.get("auto_poster_after_image"):
+            # 포스터 버튼이 이미지보다 먼저 눌린 경우의 예약 — 이미지 완료 즉시 포스터까지 이어서 생성(2026-06-12 QA).
+            st.session_state.auto_poster_after_image = False
+            try:
+                generate_poster()
+                st.success("이미지 완료 — 포스터까지 자동 생성했습니다.")
+            except Exception as exc:
+                st.error(f"포스터 자동 생성 실패: {exc} — '포스터 생성' 버튼으로 다시 시도하세요.")
+        else:
+            st.success("이미지 작업 완료. '포스터 생성'을 누르면 이미지가 합성됩니다.")
         st.rerun()
     elif updated.get("status") in IMAGE_JOB_TERMINAL_STATUSES:
         st.session_state.image_polling_enabled = False
         st.session_state.image_poll_started_at = None
+        if st.session_state.get("auto_poster_after_image"):
+            st.session_state.auto_poster_after_image = False
+            st.error("이미지 작업이 실패해 포스터 자동 생성을 취소했습니다. 이미지 재생성 후 다시 시도하세요.")
         st.rerun()
 
 def provider_label(provider: str | None) -> str:
