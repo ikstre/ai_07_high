@@ -34,12 +34,25 @@ def test_engine_text_and_image_backend_mapping():
     assert ai._engine_text_provider({}) is None
 
     assert ai._engine_image_backend({"engine": "openai"}) == "openai"
-    assert ai._engine_image_backend({"engine": "hyperclova"}) == "hyperclova"
+    # 이미지 2트랙 정리(2026-06-16): hyperclova도 이미지는 ComfyUI로 라우팅(Omni 네이티브 제외).
+    assert ai._engine_image_backend({"engine": "hyperclova"}) == "comfyui"
     assert ai._engine_image_backend({"engine": "local"}) == "comfyui"
     assert ai._engine_image_backend({"engine": "auto"}) is None
 
 
-def test_openai_tier_model_mapping():
+def test_openai_tier_model_mapping(monkeypatch):
+    # 등급→모델 기본 매핑은 운영 .env의 OPENAI_*_MODEL 오버라이드와 무관해야 한다
+    # (예: OPENAI_IMAGE_MODEL=gpt-image-1이 켜져 있어도 tier 기본값이 살아야 함).
+    from backend import config
+
+    monkeypatch.setattr(
+        ai, "get_settings", lambda: config.Settings(openai_text_model="", openai_image_model="")
+    )
+    monkeypatch.delenv("OPENAI_TEXT_MODEL", raising=False)
+    for tier in ("GENERAL", "PERFORMANCE"):
+        monkeypatch.delenv(f"OPENAI_TEXT_MODEL_{tier}", raising=False)
+        monkeypatch.delenv(f"OPENAI_IMAGE_MODEL_{tier}", raising=False)
+
     assert ai._openai_text_model({"engine_model_tier": "general"}) == "gpt-5.4-mini"
     assert ai._openai_text_model({"engine_model_tier": "performance"}) == "gpt-5.4"
     assert ai._openai_image_model({"engine_model_tier": "general"}) == "gpt-image-1-mini"
@@ -364,8 +377,11 @@ def test_generation_tracks_expose_three_user_facing_routes(monkeypatch):
     assert tracks["openai"]["text_provider"] == "openai"
     assert tracks["openai"]["image_backend"] == "openai"
     assert tracks["hyperclova"]["text_provider"] == "hyperclova"
-    assert tracks["hyperclova"]["image_backend"] == "hyperclova"
-    assert tracks["hyperclova"]["image_configured"] is False
+    # hyperclova 이미지는 ComfyUI로 라우팅 → image_backend/configured는 ComfyUI 기준(fixture는 설정됨).
+    # Omni 이미지 엔드포인트 미설정 상태는 진단용 omni_image_configured로만 노출.
+    assert tracks["hyperclova"]["image_backend"] == "comfyui"
+    assert tracks["hyperclova"]["image_configured"] is True
+    assert tracks["hyperclova"]["omni_image_configured"] is False
     assert tracks["local"]["text_provider"] == "local"
     assert tracks["local"]["image_backend"] == "comfyui"
     assert tracks["local"]["image_configured"] is True

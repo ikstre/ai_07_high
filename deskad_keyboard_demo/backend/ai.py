@@ -798,10 +798,17 @@ def _normalize_text_provider(provider: str) -> str:
 
 # 3개 평가 트랙(생성 엔진) → 텍스트 provider / 이미지 backend 매핑.
 #   openai      : OpenAI API (텍스트=OpenAI, 이미지=OpenAI Images)
-#   hyperclova  : HyperCLOVA (텍스트=HyperCLOVA, 이미지=HyperCLOVA Omni/OpenAI 호환)
+#   hyperclova  : HyperCLOVA 텍스트(카피/프롬프트) + ComfyUI 이미지
 #   local       : 로컬 텍스트 모델 + ComfyUI (텍스트=local, 이미지=ComfyUI FLUX)
+#
+# 이미지 backend는 openai / comfyui 2트랙으로 정리(2026-06-16). Omni 네이티브 이미지는
+# 모델 파라미터가 작아 충실도(배열·색·구도)가 반복적으로 부진해(다수 세션 라이브 검증) 단독
+# 이미지 엔진에서 제외하고, HyperCLOVA의 강점인 text→text(카피/이미지 프롬프트)만 살려 그
+# 결과를 ComfyUI img2img(셋업 구도 맵)로 렌더한다. Omni 이미지 코드
+# (generate_hyperclova_image_reference / _run_hyperclova_image_job)는 보존 — 이 매핑만
+# "hyperclova"로 되돌리면 즉시 복귀할 수 있다.
 ENGINE_TEXT_PROVIDER = {"openai": "openai", "hyperclova": "hyperclova", "local": "local"}
-ENGINE_IMAGE_BACKEND = {"openai": "openai", "hyperclova": "hyperclova", "local": "comfyui"}
+ENGINE_IMAGE_BACKEND = {"openai": "openai", "hyperclova": "comfyui", "local": "comfyui"}
 # OpenAI 모델 등급(일반/고성능) → 모델 ID. OPENAI_TEXT_MODEL_<TIER> / OPENAI_IMAGE_MODEL_<TIER> env로 재정의 가능.
 OPENAI_TEXT_MODEL_BY_TIER = {"general": "gpt-5.4-mini", "performance": "gpt-5.4"}
 OPENAI_IMAGE_MODEL_BY_TIER = {"general": "gpt-image-1-mini", "performance": "gpt-image-2"}
@@ -1027,10 +1034,13 @@ def generation_tracks() -> list[dict]:
             "text_model": hyperclova_text["model"],
             "vision_configured": settings.has_hyperclova_vision,
             "vision_model": settings.effective_hyperclova_vision_model or "",
-            "image_backend": "hyperclova",
-            "image_configured": settings.has_hyperclova_image,
-            "image_model": settings.effective_hyperclova_image_model or "",
-            "image_mode": settings.hyperclova_image_mode,
+            # 이미지는 Omni 네이티브 대신 ComfyUI로 렌더(2026-06-16 2트랙 정리). HyperCLOVA는
+            # 텍스트(카피/이미지 프롬프트)만 담당하므로 image_configured는 ComfyUI 가용성을 따른다.
+            # Omni 이미지 설정 상태는 진단용으로만 별도 노출(omni_image_configured).
+            "image_backend": "comfyui",
+            "image_configured": settings.has_comfyui,
+            "image_model": settings.flux_model_variant or "ComfyUI workflow",
+            "omni_image_configured": settings.has_hyperclova_image,
         },
         {
             "id": "local",
