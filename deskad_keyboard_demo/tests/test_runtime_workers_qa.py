@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import dataclasses
+
 from backend import ai, result_cache, runtime_workers
 
 
 def test_track_warm_plan_maps_user_tracks():
     assert runtime_workers.track_warm_plan("openai") == []
-    assert runtime_workers.track_warm_plan("hyperclova") == ["hyperclova_image"]
+    # 이미지 2트랙 정리(2026-06-16): hyperclova도 이미지는 ComfyUI("image") 워커를 예열(local과 동일).
+    assert runtime_workers.track_warm_plan("hyperclova") == ["image"]
     assert runtime_workers.track_warm_plan("LOCAL") == ["image"]
     assert runtime_workers.track_warm_plan("auto") is None
     assert runtime_workers.track_warm_plan("unknown") is None
@@ -151,6 +154,11 @@ def test_create_image_job_returns_running_for_hyperclova_thread(monkeypatch):
                 }
             )
 
+    # 이미지 2트랙 정리(2026-06-16) 후 engine=hyperclova는 ComfyUI로 라우팅된다. Omni 네이티브
+    # 이미지 잡 머신은 보존되며 이제 IMAGE_MODEL_BACKEND=hyperclova(서버 기본 backend)로만 도달하므로
+    # 이 경로를 그쪽으로 트리거해 검증한다(engine 미지정 → settings.image_model_backend 사용).
+    hyper_settings = dataclasses.replace(ai.get_settings(), image_model_backend="hyperclova")
+    monkeypatch.setattr(ai, "get_settings", lambda: hyper_settings)
     monkeypatch.setattr(ai, "IMAGE_JOB_STORE", Store())
     monkeypatch.setattr(ai, "_select_workflow_path", lambda payload: None)
     monkeypatch.setattr(ai, "_image_backend_config", lambda: {})
@@ -159,7 +167,7 @@ def test_create_image_job_returns_running_for_hyperclova_thread(monkeypatch):
     monkeypatch.setattr(runtime_workers, "schedule_idle_reap", lambda: None)
 
     result = ai.create_image_job(
-        {"engine": "hyperclova", "image_ratio": "1:1"},
+        {"image_ratio": "1:1"},
         "draw a keyboard",
         force_regen=True,
     )
@@ -170,7 +178,7 @@ def test_create_image_job_returns_running_for_hyperclova_thread(monkeypatch):
     assert started == [
         {
             "target": ai._run_hyperclova_image_job,
-            "args": (result["job_id"], {"engine": "hyperclova", "image_ratio": "1:1"}, "draw a keyboard"),
+            "args": (result["job_id"], {"image_ratio": "1:1"}, "draw a keyboard"),
             "name": f"hyperclova-image-{result['job_id'][:8]}",
             "daemon": True,
         }
@@ -202,6 +210,10 @@ def test_create_image_job_exposes_native_omni_prompt_for_guard(monkeypatch):
         def start(self):
             pass
 
+    # Omni 네이티브 이미지 경로는 이제 IMAGE_MODEL_BACKEND=hyperclova(서버 기본 backend)로만 도달한다
+    # (engine=hyperclova는 ComfyUI로 라우팅 — 2026-06-16 2트랙 정리).
+    hyper_settings = dataclasses.replace(ai.get_settings(), image_model_backend="hyperclova")
+    monkeypatch.setattr(ai, "get_settings", lambda: hyper_settings)
     monkeypatch.setattr(ai, "IMAGE_JOB_STORE", Store())
     monkeypatch.setattr(ai, "_select_workflow_path", lambda payload: None)
     monkeypatch.setattr(ai, "_image_backend_config", lambda: {})
@@ -210,7 +222,7 @@ def test_create_image_job_exposes_native_omni_prompt_for_guard(monkeypatch):
     monkeypatch.setattr(runtime_workers, "schedule_idle_reap", lambda: None)
 
     result = ai.create_image_job(
-        {"engine": "hyperclova", "image_ratio": "1:1", "layout": "65", "keycap_profile": "cherry"},
+        {"image_ratio": "1:1", "layout": "65", "keycap_profile": "cherry"},
         "bracketed comfyui prompt without grounding",
         force_regen=True,
     )

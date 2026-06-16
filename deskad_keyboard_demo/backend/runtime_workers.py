@@ -542,11 +542,13 @@ def ensure_hyperclova_image_worker() -> bool:
 # ── 트랙(생성 엔진) 선택 기점 워밍업 ──────────────────────────────────────────
 
 # 트랙 → 미리 워밍업할 워커. openai는 API만 쓰므로 로컬 GPU를 전부 비운다.
-# hyperclova의 vision(:11601)은 image(:11602)와 단일 L4에 동시 적재 불가(11+15GB>22GB)
-# → 무거운 이미지 생성 서버를 기본 워밍업하고, vision은 입력 단계에서 on-demand 기동.
+# 트랙별 예열 GPU 워커. 이미지 2트랙 정리(2026-06-16) 후 hyperclova도 이미지는 ComfyUI("image")로
+# 렌더하므로 Omni 이미지 워커("hyperclova_image") 대신 ComfyUI 이미지 워커를 예열한다(local과 동일).
+# Omni 네이티브 이미지는 IMAGE_MODEL_BACKEND=hyperclova로만 도달 — 트랙 예열 대상이 아니다.
+# (hyperclova vision(:11601)은 카피 단계에서 도면 입력이 있을 때만 on-demand 기동.)
 _TRACK_WARM_WORKERS = {
     "openai": [],
-    "hyperclova": ["hyperclova_image"],
+    "hyperclova": ["image"],
     "local": ["image"],
 }
 
