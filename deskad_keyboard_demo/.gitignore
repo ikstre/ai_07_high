@@ -9,3 +9,4 @@ data/runtime/cache/
 # explicitly with a leading "!" (e.g. the security guide below).
 docs/*
 !docs/security.md
+!docs/deploy.md

@@ -9,7 +9,25 @@
 | ① 상품 정보 | 키보드 모델명·레이아웃 입력, STEP/STP/GLB 업로드 |
 | ② 도면 미리보기 | 레이아웃 JSON → SVG 탑뷰 도면 생성 |
 | ③ 3D 셋업 구성 | 책상 크기·모니터 크기·데스크테리어 선택 후 GLB 생성 |
-| ④ 광고 생성 | 광고 문구(AI/폴백 템플릿) + SVG 포스터 다운로드 |
+| ④ 광고 생성 | 광고 문구(AI/폴백 템플릿) + 광고 이미지 생성(엔진 선택) + SVG/PPTX 포스터 다운로드 |
+
+---
+
+## 이미지 생성 엔진
+
+광고 문구·이미지는 **엔진**을 골라 생성합니다(`engine` = `auto`/`local`/`hyperclova`/`openai`). 사용 가능 여부는 `GET /ai/providers`로 조회합니다.
+
+| 엔진 | 광고 문구 | 광고 이미지 | 비고 |
+|------|-----------|-------------|------|
+| `local` | 로컬 LLM(Ollama) | ComfyUI/FLUX img2img | 키 불필요, 도면/셋업 픽셀 참조로 정확도 우선 |
+| `hyperclova` | HyperCLOVA X SEED | HyperCLOVA Omni 네이티브 text→image | 설정값을 텍스트로 그라운딩 |
+| `openai` | OpenAI 호환 API | OpenAI 이미지 | `OPENAI_API_KEY` 필요 |
+
+- **비동기 이미지 잡**: `POST /ai/image/jobs`로 큐에 넣고 `GET /ai/image/jobs/{id}`로 폴링합니다. 동기 `POST /ai/image`도 유지됩니다.
+- **best-of-N 구도 선별**: 여러 후보를 만든 뒤 `quality_gate`가 구도 기준으로 가장 좋은 컷을 고릅니다(`/ai/image/jobs/{id}/quality`).
+- 엔진/워커/키가 없으면 폴백: 문구는 템플릿, 이미지는 SVG 일러스트(모니터+키보드 실루엣).
+
+GPU 워커(ComfyUI/Omni/SEED)는 단일 L4 VRAM을 공유합니다. `GPU_WORKER_MODE`로 워커 수명주기를 제어합니다 — `always_on`(기본, 외부에서 관리)·`exclusive`(켜기 전 경쟁 워커 종료)·`on_demand`.
 
 ---
 
@@ -39,6 +57,19 @@ bash deskad_keyboard_demo/start.sh
 bash deskad_keyboard_demo/start.sh --restart   # 실행 중인 서버 재시작
 bash deskad_keyboard_demo/start.sh --stop      # 서버 종료
 ```
+
+### 2-1. Docker로 실행 (선택)
+
+앱 티어(FastAPI+Streamlit)는 CPU-only라 컨테이너로도 띄울 수 있습니다. GPU 워커는 호스트(systemd/Popen)에 그대로 두고 `GPU_WORKER_MODE=always_on`으로 HTTP 호출만 합니다.
+
+```bash
+cd deskad_keyboard_demo
+cp .env.example .env            # 값 입력. 워커 *_BASE_URL은 host.docker.internal 권장
+docker compose up -d --build
+curl -fsS http://127.0.0.1:8010/health
+```
+
+두 서비스 모두 호스트 `127.0.0.1`에만 바인딩되며, 외부 접속은 기존처럼 호스트 nginx `:8443`이 담당합니다. 자세한 배포 절차·주의사항은 [docs/deploy.md](docs/deploy.md)를 참고하세요.
 
 ### 3. 모델 워커(systemd, 선택)
 
@@ -113,6 +144,9 @@ https://<VM_IP>:8443
 > - `8010` — FastAPI 백엔드, loopback 전용  
 > - `8188` — ComfyUI 이미지 워커, loopback 전용  
 > - `11434` — Ollama 로컬 LLM, loopback 전용  
+> - `11501` — HyperCLOVA X SEED 텍스트 워커, loopback 전용  
+> - `11601` — HyperCLOVA Omni 비전 워커(4bit), loopback 전용  
+> - `11602` — HyperCLOVA Omni 이미지 워커(8bit), loopback 전용  
 > - `8000` — JupyterHub 전용, **절대 사용 금지**
 
 ---
@@ -157,6 +191,8 @@ https://<VM_IP>:8443
 | 60% | 약 28.6 × 9.5 cm | 61키 |
 | 65% | 약 30.5 × 9.5 cm | 67키 |
 | 75% | 약 30.5 × 11.4 cm | 84키 |
+| 87% (TKL) | 약 34.8 × 11.4 cm | 87키 |
+| 104% (풀배열) | 약 42.9 × 11.4 cm | 104키 |
 
 MX 스위치 간격 기준 `1u = 19.05 mm`.
 
@@ -166,26 +202,40 @@ MX 스위치 간격 기준 `1u = 19.05 mm`.
 
 ```
 deskad_keyboard_demo/
-├── start.sh                    # 통합 실행 스크립트
-├── streamlit_app.py            # Streamlit 프론트엔드
-├── requirements.txt
+├── start.sh                    # 앱 티어 통합 실행 스크립트
+├── streamlit_app.py            # Streamlit 진입점
+├── ppt_export.py               # 포스터 PPTX/PIL 렌더
+├── requirements.txt            # 앱 티어 의존성 (CPU-only, torch 없음)
+├── Dockerfile / .dockerignore  # 앱 컨테이너 이미지
+├── docker-compose.yml          # backend + frontend 2서비스
 ├── .env.example
-├── backend/
-│   ├── main.py                 # FastAPI 라우터
+├── backend/                    # FastAPI
+│   ├── main.py                 # 엔드포인트 정의
+│   ├── app_factory.py          # 앱 생성 + StaticFiles 마운트
+│   ├── routes/                 # assets · layouts · plates 라우터
 │   ├── renderer.py             # 절차적 GLB 생성기
-│   ├── ai.py                   # 광고 문구 생성 (OpenAI / 로컬 LLM / 템플릿)
-│   ├── assets.py               # 데스크테리어 카탈로그
-│   ├── cad.py                  # STEP 변환 유틸
+│   ├── ai.py                   # 문구/이미지 생성 (엔진 선택·폴백)
+│   ├── copy_policy.py          # 문구 품질 정책/재시도
+│   ├── quality_gate.py         # 이미지 best-of-N 구도 선별
+│   ├── job_store.py            # 비동기 이미지 잡 큐 (jsonl)
+│   ├── result_cache.py         # 생성 결과 캐시
+│   ├── runtime_workers.py      # GPU 워커 수명주기 (GPU_WORKER_MODE)
+│   ├── llm_adapters.py         # OpenAI / HyperCLOVA / 로컬 LLM 어댑터
+│   ├── library.py              # 공유 모델/데이터 라이브러리
+│   ├── auth.py / user_store.py # 로그인·회원가입·사용자 저장
+│   ├── security.py             # 로그 마스킹·입력 검증
+│   ├── assets.py / plates.py   # 데스크테리어·플레이트 카탈로그
+│   ├── cad.py / drawing_converter.py  # STEP·도면 변환
+│   ├── schemas.py / errors.py / filenames.py
 │   └── config.py               # 환경 변수 로딩
+├── ui/                         # Streamlit UI 모듈 (api_client · sidebar · theme 등)
+├── tools/                      # omni/SEED 서버 · ComfyUI 워크플로 · systemd · git-hooks
+├── tests/                      # pytest (CI에서 ruff + pytest 실행)
 ├── data/
 │   ├── desk_assets.json        # 데스크테리어 항목 정의
-│   └── layouts/
-│       ├── layout_60.json      # 60% ANSI (61키)
-│       ├── layout_65.json      # 65% (67키)
-│       └── layout_75.json      # 75% (84키)
-└── training/
-    ├── README.md               # LoRA 학습 준비 가이드
-    └── prepare_desk_lora_dataset.py
+│   ├── layouts/                # layout_60/65/75/87/104.json
+│   └── runtime/                # 세션·이미지 잡·users.json (gitignore)
+└── training/                   # LoRA 학습 준비 (보류)
 ```
 
 ---
@@ -195,12 +245,22 @@ deskad_keyboard_demo/
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | GET | `/health` | 헬스체크 |
-| GET | `/assets/desk` | 데스크테리어 항목 카탈로그 |
-| POST | `/render/desk-setup` | 키보드 + 데스크테리어 GLB 생성 |
-| POST | `/render/uploaded-model` | STEP/STP/GLB 업로드 미리보기 |
-| POST | `/ai/copy` | 광고 문구 생성 |
-| POST | `/ai/poster` | 광고 문구 + SVG 포스터 생성 |
-| GET | `/security/config` | API 키 마스킹 상태 확인 |
+| POST | `/auth/login` · `/auth/signup` · `/auth/logout` | 로그인 · 회원가입(초대코드) · 로그아웃 |
+| GET | `/security/config` | API 키 설정/미설정 상태 (값 미노출) |
+| GET | `/assets/desk` · `/assets/references` | 데스크테리어 · 참조 자산 카탈로그 |
+| GET | `/layouts` | 키보드 레이아웃 목록 (60/65/75/87/104) |
+| GET | `/plates` · `/plates/brands` · `/plates/{id}/preview` | 플레이트 검색 · 브랜드 · 미리보기 |
+| GET · POST | `/models/library` · `/models/library/prepare` | 공유 모델 라이브러리 조회 · 준비 |
+| POST | `/render/keyboard-preview` · `/render/desk-setup` | 키보드 / 데스크 셋업 GLB 생성 |
+| POST | `/render/uploaded-model` · `/render/plate-drawing` | 업로드 모델 미리보기 · 플레이트 도면 |
+| GET | `/ai/providers` | 사용 가능한 엔진/프로바이더 조회 |
+| POST | `/ai/activate_track` | 생성 트랙(GPU 워커) 활성화 |
+| POST | `/ai/copy` · `/ai/copy/experiment` · `/ai/copy/variants` | 광고 문구 생성 · 엔진 비교 · N개 변형 |
+| POST | `/ai/image` | 광고 이미지 생성 (동기) |
+| POST · GET | `/ai/image/jobs` · `/ai/image/jobs/{id}` | 비동기 이미지 잡 생성 · 폴링 · 목록 |
+| POST · GET | `/ai/image/jobs/{id}/quality` | best-of-N 구도 평가 · 결과 |
+| GET | `/ai/quality/summary` | 품질 게이트 요약 |
+| POST | `/ai/poster` | 광고 문구 + 포스터 (SVG/PPTX) |
 
 ---
 
