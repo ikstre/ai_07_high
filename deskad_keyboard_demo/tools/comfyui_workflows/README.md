@@ -32,8 +32,10 @@
 | `{image_quantization}` | `IMAGE_QUANTIZATION` | |
 | `{lora_name}` | `COMFYUI_LORA_NAME` | 빈 값이면 no-op |
 | `{lora_strength}` | `COMFYUI_LORA_STRENGTH` | float (기본 0.0) |
-| `{controlnet_image}` | `COMFYUI_CONTROLNET_IMAGE` | 빈 값이면 no-op |
-| `{controlnet_strength}` | `COMFYUI_CONTROLNET_STRENGTH` | float (기본 0.0) |
+| `{controlnet_image}` | `COMFYUI_CONTROLNET_IMAGE` | 정적 ControlNet 입력 파일명(빈 값이면 no-op) |
+| `{controlnet_model}` | `COMFYUI_CONTROLNET_MODEL` | ControlNet 모델 파일명(models/controlnet/ 기준). `flux_controlnet_depth`가 사용 |
+| `{controlnet_image_name}` | 셋업 GLB depth 자동 렌더·업로드 | 워크플로에 이 토큰이 있으면 `model_url`의 GLB를 헤드리스(OSMesa) 렌더한 depth PNG를 ComfyUI `/upload/image`에 올려 LoadImage 파일명으로 치환. GLB 미해석/실패 시 워크플로 미구동(draft) |
+| `{controlnet_strength}` | `COMFYUI_CONTROLNET_STRENGTH` | float (기본 0.0). depth-ControlNet 충실도 노브 |
 | `{denoise}` | `COMFYUI_IMG2IMG_DENOISE` / `COMFYUI_COMPOSITION_DENOISE` | float. 셋업 구도 맵 reference는 composition denoise 사용 |
 | `{reference_image_name}` | 선택 도면/셋업 구도 맵 자동 업로드 | 워크플로에 이 토큰이 있으면 `_reference_image_b64`의 래스터를 ComfyUI `/upload/image`에 올려 LoadImage 파일명으로 치환. 레퍼런스 없으면 워크플로 미구동(draft) |
 
@@ -50,6 +52,7 @@
 - `flux_pastel.json` — `theme=pastel`. negative에 `harsh shadow / overexposed / dark mood` 보강(밝고 부드러운 톤 유도).
 - `flux_premium.json` — `theme=premium`. **hires 2-pass**: 1차 KSampler → `LatentUpscaleBy ×1.5` → 2차 KSampler(denoise 0.5)로 디테일/해상감↑. 배율 노드라 종횡비 유지. 추론 시간이 더 길다.
 - `flux_gaming.json` — `theme=gaming`. negative에 `washed out / flat lighting / low contrast` 보강(어둡고 또렷한 무드 유도).
+- `flux_controlnet_depth.json` — **depth-ControlNet으로 배열 고정**. 셋업 구도 레퍼런스 요청에서 `COMFYUI_CONTROLNET_MODEL`(union 또는 단일 depth)과 `COMFYUI_CONTROLNET_STRENGTH>0`가 설정되면 `flux_img2img`보다 우선 선택된다. text2img(EmptyLatentImage, denoise 1.0)로 사진 품질을 내면서, 셋업 GLB를 헤드리스 렌더한 depth(`{controlnet_image_name}`)를 `ControlNetLoader → SetUnionControlNetType(type=depth) → ControlNetApplyAdvanced(strength=`{controlnet_strength}`, vae 연결)`로 주입해 65% 배열을 denoise와 독립적으로 고정한다. 평면 raster img2img로는 "사진+정확 배열"을 동시에 못 얻는다는 2026-06-16 A/B 결론에 따른 경로. union이 아닌 단일 depth 모델을 쓰면 `SetUnionControlNetType` 노드를 빼면 된다.
 - `flux_img2img.json` — **레퍼런스 강제(img2img)**. `EmptyLatentImage` 대신 `LoadImage({reference_image_name})→VAEEncode`로 선택 도면/셋업 구도 맵을 latent화해 `KSampler.latent_image`에 연결(steps `{steps}`, denoise `{denoise}`). 출력이 레퍼런스 구조를 닮게 한다. 셋업 구도 맵은 `COMFYUI_COMPOSITION_STEPS`(기본 8)와 `COMFYUI_COMPOSITION_DENOISE`(기본 0.90)를 사용하고, 선택 도면은 `COMFYUI_STEPS`(기본 4)와 `COMFYUI_IMG2IMG_DENOISE`(기본 0.65)를 사용한다.
 
 > theme별 "분위기"는 이미 `build_image_prompt`가 positive 프롬프트에 반영한다. schnell은 `cfg=1.0`이라

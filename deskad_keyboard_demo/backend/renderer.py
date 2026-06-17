@@ -1,7 +1,15 @@
 import json
 import math
+import os
 import struct
 from pathlib import Path
+
+# 헤드리스 depth 렌더(build_desk_setup_depth_png)는 pyrender→PyOpenGL을 쓰는데, 이
+# 환경의 EGL은 Mesa 디바이스 미초기화로 실패하므로 OSMesa(소프트웨어)를 강제한다.
+# PyOpenGL은 import 시점에 PYOPENGL_PLATFORM을 읽으므로, pyrender가 (테스트의
+# importorskip 등) 어디서든 먼저 import돼도 깨지지 않도록 렌더러 모듈 로드 시점에
+# 미리 잡아 둔다(이미 설정돼 있으면 존중). GLB 빌드는 PyOpenGL을 안 써 영향 없다.
+os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
 
 
 def hex_to_rgba(value: str, alpha: float = 1.0) -> list[float]:
@@ -2326,3 +2334,114 @@ def build_uploaded_step_proxy_glb(
         "message": "STEP converter CLI is not configured, so a proxy GLB was generated.",
         "model_file": output_path.name,
     }
+
+
+# ─── ControlNet depth 입력(GLB → depth PNG) ──────────────────────────────────
+# 셋업 구도 맵(평면 색블록)은 사진 init으로 부적합하고, plain img2img로는 "사진+
+# 정확 배열"을 동시에 못 얻는다(2026-06-16 denoise A/B). depth-ControlNet으로 구조를
+# denoise와 독립적으로 고정하기 위해, 생성한 GLB 데스크 씬을 헤드리스(OSMesa, CPU)로
+# 렌더해 z-buffer만 정규화한 grayscale depth PNG를 만든다.
+#  - near=밝게(255)/far=어둡게, 빈 공간(z-buffer 미히트)=검정 → FLUX depth ControlNet 규약.
+#  - GPU 미사용(OSMesa 소프트웨어 렌더) → exclusive GPU 워커와 무관, VRAM 영향 없음.
+#  - pyrender import는 PYOPENGL_PLATFORM=osmesa가 먼저 잡혀야(EGL은 Mesa 미초기화로 실패)
+#    하므로 함수 내부 지연 import + env 선설정. 카메라는 셋업 구도 맵 hero 3/4와 동일 계열.
+
+# 동일 GLB를 strength A/B 등으로 반복 사용할 때 ~5s CPU 렌더를 매번 반복하지 않도록
+# (해석된 경로, mtime, size, eye)별로 depth PNG 바이트를 프로세스 내 캐시한다.
+_DEPTH_CACHE: dict[tuple, bytes] = {}
+_DEPTH_CACHE_MAX = 16
+
+
+def build_desk_setup_depth_png(
+    glb_path,
+    *,
+    size: int = 1024,
+    eye_y: float = 52.0,
+    eye_z: float = 82.0,
+) -> bytes | None:
+    """GLB 데스크 씬을 헤드리스 렌더해 depth-ControlNet 입력 PNG 바이트를 반환.
+
+    카메라/구도는 ``build_setup_composition_raster``의 hero 3/4(전면-상단에서 키보드를
+    내려다보는 앵글)와 같은 계열이라 프롬프트 앵글과 일치한다. depth는 near=밝게/far=어둡게로
+    정규화하고 빈 공간(z-buffer 미히트)은 검정으로 둔다(FLUX depth ControlNet 규약).
+    실패하면 ``None``(호출부가 ControlNet 없이 진행하거나 draft 처리).
+    """
+    try:
+        path = Path(glb_path)
+        if not path.exists():
+            return None
+        S = max(256, int(size))
+        cache_key = (str(path.resolve()), path.stat().st_mtime_ns, S, float(eye_y), float(eye_z))
+    except OSError:
+        return None
+    cached = _DEPTH_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    import os
+
+    # EGL은 이 환경의 Mesa 디바이스 미초기화로 실패한다 → OSMesa(소프트웨어) 필수.
+    # 다른 곳에서 OpenGL을 먼저 import하지 않으므로 함수 진입 시 설정해도 충분하다.
+    os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
+    try:
+        import io
+
+        import numpy as np
+        import pyrender
+        import trimesh
+        from PIL import Image
+    except Exception:
+        return None
+
+    def _look_at(eye, target, up=(0.0, 1.0, 0.0)):
+        eye = np.array(eye, float)
+        target = np.array(target, float)
+        up = np.array(up, float)
+        f = target - eye
+        f /= np.linalg.norm(f) or 1.0
+        s = np.cross(f, up)
+        s /= np.linalg.norm(s) or 1.0
+        u = np.cross(s, f)
+        m = np.eye(4)
+        m[:3, 0] = s
+        m[:3, 1] = u
+        m[:3, 2] = -f
+        m[:3, 3] = eye
+        return m
+
+    renderer = None
+    try:
+        tscene = trimesh.load(str(path))
+        # 조명/색은 무관(z-buffer만 사용) → ambient만 주고 라이트는 생략.
+        scene = pyrender.Scene.from_trimesh_scene(
+            tscene, bg_color=[0, 0, 0, 255], ambient_light=[1.0, 1.0, 1.0]
+        )
+        cam = pyrender.PerspectiveCamera(yfov=0.62, aspectRatio=1.0)
+        scene.add(cam, pose=_look_at((0.0, float(eye_y), float(eye_z)), (0.0, 2.0, 6.0)))
+        renderer = pyrender.OffscreenRenderer(S, S)
+        _, depth = renderer.render(scene)
+    except Exception:
+        return None
+    finally:
+        if renderer is not None:
+            try:
+                renderer.delete()
+            except Exception:
+                pass
+
+    valid = depth > 0
+    if not valid.any():
+        return None
+    near = float(depth[valid].min())
+    far = float(depth[valid].max())
+    norm = np.zeros_like(depth)
+    norm[valid] = 1.0 - (depth[valid] - near) / (far - near + 1e-6)  # near=밝게
+    gray = (norm * 255.0).astype(np.uint8)
+    out = io.BytesIO()
+    # 3채널 RGB로 저장 → ComfyUI LoadImage/ControlNet apply가 그대로 받는다.
+    Image.fromarray(gray, mode="L").convert("RGB").save(out, format="PNG")
+    data = out.getvalue()
+    if len(_DEPTH_CACHE) >= _DEPTH_CACHE_MAX:
+        _DEPTH_CACHE.pop(next(iter(_DEPTH_CACHE)))
+    _DEPTH_CACHE[cache_key] = data
+    return data

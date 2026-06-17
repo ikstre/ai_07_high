@@ -114,6 +114,12 @@ class Settings:
     comfyui_lora_strength: float = _float_env("COMFYUI_LORA_STRENGTH", 0.0)
     comfyui_controlnet_image: str = os.getenv("COMFYUI_CONTROLNET_IMAGE", "")
     comfyui_controlnet_strength: float = _float_env("COMFYUI_CONTROLNET_STRENGTH", 0.0)
+    # depth-ControlNet 워크플로(flux_controlnet_depth)가 쓰는 ControlNet 모델 파일명
+    # (ComfyUI models/controlnet/ 기준). 비어 있으면 ControlNet 경로가 비활성이라
+    # 셋업 레퍼런스는 기존 img2img(flux_img2img)로 폴백한다. strength>0 와 함께여야
+    # 활성. 평면 색블록 img2img로는 "사진+정확 배열"을 동시에 못 얻어(2026-06-16 A/B),
+    # GLB depth로 배열을 denoise와 독립적으로 고정하기 위한 노브.
+    comfyui_controlnet_model: str = os.getenv("COMFYUI_CONTROLNET_MODEL", "")
     # FLUX schnell 기본은 4스텝으로 빠르지만, 셋업 구도 맵 img2img는 키캡/배열
     # 디테일이 뭉개지기 쉬워 composition 전용 steps를 따로 높일 수 있게 한다.
     comfyui_steps: int = _int_env("COMFYUI_STEPS", 4)
@@ -276,6 +282,8 @@ def redacted_settings() -> dict:
         "comfyui_composition_steps": settings.comfyui_composition_steps,
         "comfyui_img2img_denoise": settings.comfyui_img2img_denoise,
         "comfyui_composition_denoise": settings.comfyui_composition_denoise,
+        "comfyui_controlnet_model": settings.comfyui_controlnet_model or "unset",
+        "comfyui_controlnet_strength": settings.comfyui_controlnet_strength,
         "flux_model_variant": settings.flux_model_variant or "unset",
         "image_quantization": settings.image_quantization or "unset",
         "enable_vae_tiling": settings.enable_vae_tiling,

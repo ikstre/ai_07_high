@@ -219,6 +219,10 @@ def make_image_cache_key(
             "quantization": os.getenv("IMAGE_QUANTIZATION", ""),
             "negative_prompt": os.getenv("COMFYUI_NEGATIVE_PROMPT", ""),
             "lora": os.getenv("COMFYUI_LORA_NAME", ""),
+            # ControlNet 모델/강도는 워크플로 placeholder라 workflow_hash로는 안 잡힌다
+            # (파일 내용은 동일) → strength 스윕이 캐시에 막히지 않도록 키에 직접 넣는다.
+            "controlnet_model": os.getenv("COMFYUI_CONTROLNET_MODEL", ""),
+            "controlnet_strength": os.getenv("COMFYUI_CONTROLNET_STRENGTH", ""),
         },
         sort_keys=True,
     )

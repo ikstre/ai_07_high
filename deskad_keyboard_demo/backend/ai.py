@@ -2995,6 +2995,8 @@ def _image_backend_config() -> dict:
         "comfyui_composition_steps": settings.comfyui_composition_steps,
         "comfyui_img2img_denoise": settings.comfyui_img2img_denoise,
         "comfyui_composition_denoise": settings.comfyui_composition_denoise,
+        "comfyui_controlnet_model": settings.comfyui_controlnet_model or "unset",
+        "comfyui_controlnet_strength": settings.comfyui_controlnet_strength,
         "flux_model_variant": settings.flux_model_variant or "unset",
         "image_quantization": settings.image_quantization or "unset",
         "enable_vae_tiling": settings.enable_vae_tiling,
@@ -3037,6 +3039,35 @@ def _safe_workflow_name(value) -> str:
     return name if _WORKFLOW_NAME_RE.match(name) else ""
 
 
+def _controlnet_enabled(settings) -> bool:
+    """depth-ControlNet 경로 활성 여부: 모델 파일명 설정 + strength>0.
+
+    둘 중 하나라도 비면 워크플로가 빈 모델/0 강도로 제출돼 실패하므로, 활성으로
+    치지 않고 기존 img2img(flux_img2img)로 폴백시킨다.
+    """
+    try:
+        return bool(settings.comfyui_controlnet_model) and float(settings.comfyui_controlnet_strength) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _setup_glb_path(payload: dict) -> Path | None:
+    """payload의 model_url에서 디스크상 셋업 GLB 경로를 해석(없거나 미존재면 None).
+
+    셋업 빌드 응답의 model_url(``.../static/models/<name>.glb``)에서 파일명만 떼어
+    백엔드 정적 모델 디렉터리와 결합한다. 경로 탈출 방지를 위해 basename만 쓰고
+    .glb/.gltf 만 허용한다. depth-ControlNet 입력을 이 GLB에서 렌더한다.
+    """
+    model_url = payload.get("model_url")
+    if not isinstance(model_url, str) or not model_url.strip():
+        return None
+    name = os.path.basename(urlparse(model_url).path)
+    if not name.lower().endswith((".glb", ".gltf")):
+        return None
+    candidate = _BACKEND_BASE_DIR / "static" / "models" / name
+    return candidate if candidate.exists() else None
+
+
 def _candidate_workflow_names(payload: dict) -> list[str]:
     """Ordered workflow-name candidates: explicit > situational > default.
 
@@ -3053,6 +3084,16 @@ def _candidate_workflow_names(payload: dict) -> list[str]:
     # 선행 후보로 넣는다. txt2img 계열이 먼저 잡히면 {reference_image_name} 치환이
     # 일어나지 않아 레퍼런스가 통째로 무시된다(QA 2026-06-10 #1).
     if _reference_image_b64(payload):
+        # ControlNet(depth) 활성 + 셋업 구도 레퍼런스 + GLB 해석 가능이면 depth 워크플로를
+        # img2img보다 우선한다. 평면 raster img2img로는 "사진+정확 배열"을 동시에 못 얻어
+        # (2026-06-16 denoise A/B), GLB depth로 배열을 denoise와 독립적으로 고정한다.
+        # 비활성/GLB 누락이면 기존 flux_img2img로 자연 폴백.
+        if (
+            payload.get("reference_is_composition")
+            and _controlnet_enabled(settings)
+            and _setup_glb_path(payload) is not None
+        ):
+            names.append("flux_controlnet_depth")
         names.append("flux_img2img")
     for key in ("template", "poster_template", "theme"):
         situ = _safe_workflow_name(payload.get(key))
@@ -3109,6 +3150,7 @@ def _workflow_placeholder_mapping(
         "lora_strength": settings.comfyui_lora_strength,
         "controlnet_image": settings.comfyui_controlnet_image,
         "controlnet_strength": settings.comfyui_controlnet_strength,
+        "controlnet_model": settings.comfyui_controlnet_model,
         "denoise": settings.comfyui_img2img_denoise if denoise is None else denoise,
     }
     mapping: dict = {}
@@ -3180,6 +3222,44 @@ def _upload_reference_to_comfyui(payload: dict, settings) -> str | None:
     return f"{subfolder}/{name}" if subfolder else name
 
 
+def _upload_controlnet_depth_to_comfyui(payload: dict, settings) -> str | None:
+    """셋업 GLB를 헤드리스 렌더한 depth PNG를 ComfyUI에 올리고 LoadImage용 파일명 반환.
+
+    flux_controlnet_depth 워크플로의 ``{controlnet_image_name}``(LoadImage→ControlNet)
+    자리를 채운다. depth는 구조를 denoise와 독립적으로 고정하는 ControlNet 입력이다.
+    GLB 미해석/렌더 실패/업로드 실패면 None(호출부가 ControlNet 불가로 draft 처리).
+    """
+    glb_path = _setup_glb_path(payload)
+    if glb_path is None:
+        return None
+    try:
+        from .renderer import build_desk_setup_depth_png
+
+        depth_png = build_desk_setup_depth_png(glb_path)
+    except Exception:
+        depth_png = None
+    if not depth_png:
+        return None
+    # 출력 비율에 맞춰 cover-crop(1:1이면 no-op) → 컨트롤 힌트가 latent 비율과 맞는다.
+    depth_png = _resize_reference_to_ratio(depth_png, payload) or depth_png
+    try:
+        response = requests.post(
+            f"{settings.comfyui_base_url.rstrip('/')}/upload/image",
+            files={"image": ("deskad_controlnet_depth.png", depth_png, "image/png")},
+            data={"overwrite": "true"},
+            timeout=settings.request_timeout_seconds,
+        )
+        response.raise_for_status()
+        info = response.json()
+    except Exception:
+        return None
+    name = info.get("name")
+    if not name:
+        return None
+    subfolder = info.get("subfolder")
+    return f"{subfolder}/{name}" if subfolder else name
+
+
 def _load_comfyui_workflow(payload: dict, image_prompt: str) -> dict | None:
     settings = get_settings()
     workflow_path = _select_workflow_path(payload)
@@ -3202,6 +3282,15 @@ def _load_comfyui_workflow(payload: dict, image_prompt: str) -> dict | None:
             return None
         mapping["{reference_image_name}"] = uploaded
         mapping["{{reference_image_name}}"] = uploaded
+    # depth-ControlNet: 워크플로가 {controlnet_image_name}을 참조하면 셋업 GLB를
+    # 헤드리스 렌더한 depth를 업로드해 그 파일명으로 치환한다. 렌더/업로드 실패면
+    # 구동할 컨트롤 입력이 없으므로 None(호출부가 draft 처리).
+    if "{controlnet_image_name}" in workflow_text:
+        depth_name = _upload_controlnet_depth_to_comfyui(payload, settings)
+        if not depth_name:
+            return None
+        mapping["{controlnet_image_name}"] = depth_name
+        mapping["{{controlnet_image_name}}"] = depth_name
     workflow = json.loads(workflow_text)
     return _replace_workflow_placeholders(workflow, mapping)
 
