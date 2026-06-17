@@ -9,7 +9,7 @@
 | ① 상품 정보 | 키보드 모델명·레이아웃 입력, STEP/STP/GLB 업로드 |
 | ② 도면 미리보기 | 레이아웃 JSON → SVG 탑뷰 도면 생성 |
 | ③ 3D 셋업 구성 | 책상 크기·모니터 크기·데스크테리어 선택 후 GLB 생성 |
-| ④ 광고 생성 | 광고 문구(AI/폴백 템플릿) + 광고 이미지 생성(엔진 선택) + SVG/PPTX 포스터 다운로드 |
+| ④ 광고 생성 | 광고 문구(AI/폴백 템플릿) + 광고 이미지 생성(엔진 선택·배열 충실도 고정) + SVG/PPTX 포스터 다운로드 |
 
 ---
 
@@ -19,12 +19,13 @@
 
 | 엔진 | 광고 문구 | 광고 이미지 | 비고 |
 |------|-----------|-------------|------|
-| `local` | 로컬 LLM(Ollama) | ComfyUI/FLUX img2img | 키 불필요, 도면/셋업 픽셀 참조로 정확도 우선 |
-| `hyperclova` | HyperCLOVA X SEED | HyperCLOVA Omni 네이티브 text→image | 설정값을 텍스트로 그라운딩 |
+| `local` | 로컬 LLM(Ollama) | ComfyUI/FLUX (depth-ControlNet / img2img) | 키 불필요, 셋업 배열을 구조·픽셀로 고정해 정확도 우선 |
+| `hyperclova` | HyperCLOVA X SEED | ComfyUI/FLUX (2트랙) | 카피는 HyperCLOVA, 이미지는 ComfyUI로 라우팅 |
 | `openai` | OpenAI 호환 API | OpenAI 이미지 | `OPENAI_API_KEY` 필요 |
 
 - **비동기 이미지 잡**: `POST /ai/image/jobs`로 큐에 넣고 `GET /ai/image/jobs/{id}`로 폴링합니다. 동기 `POST /ai/image`도 유지됩니다.
-- **best-of-N 구도 선별**: 여러 후보를 만든 뒤 `quality_gate`가 구도 기준으로 가장 좋은 컷을 고릅니다(`/ai/image/jobs/{id}/quality`).
+- **배열 충실도(depth-ControlNet)**: 셋업 구도 레퍼런스 요청에서 `COMFYUI_CONTROLNET_MODEL` + `COMFYUI_CONTROLNET_STRENGTH>0`이면, 셋업 GLB를 헤드리스(OSMesa, CPU) 렌더한 depth로 키보드 배열(예: 65% 컴팩트)을 **denoise와 독립적으로 고정**합니다(사진 품질 유지). `COMFYUI_CONTROLNET_END_PERCENT`(사진감)·`COMFYUI_BEST_OF_N`(액센트 색 충실도)로 추가 조절하며, 비활성/부적합 컷(flat-lay·macro)이면 img2img로 자연 폴백합니다. 노브 상세는 `.env.example` 참고.
+- **best-of-N 선별**: 여러 후보 중 `quality_gate`가 구도와 **액센트 색** 기준으로 가장 좋은 컷을 고릅니다(`/ai/image/jobs/{id}/quality`). batch가 VRAM을 넘으면 자동으로 N을 낮춰 재시도합니다.
 - 엔진/워커/키가 없으면 폴백: 문구는 템플릿, 이미지는 SVG 일러스트(모니터+키보드 실루엣).
 
 GPU 워커(ComfyUI/Omni/SEED)는 단일 L4 VRAM을 공유합니다. `GPU_WORKER_MODE`로 워커 수명주기를 제어합니다 — `always_on`(기본, 외부에서 관리)·`exclusive`(켜기 전 경쟁 워커 종료)·`on_demand`.
@@ -213,10 +214,10 @@ deskad_keyboard_demo/
 │   ├── main.py                 # 엔드포인트 정의
 │   ├── app_factory.py          # 앱 생성 + StaticFiles 마운트
 │   ├── routes/                 # assets · layouts · plates 라우터
-│   ├── renderer.py             # 절차적 GLB 생성기
+│   ├── renderer.py             # 절차적 GLB 생성기 + depth-ControlNet 입력 렌더(OSMesa)
 │   ├── ai.py                   # 문구/이미지 생성 (엔진 선택·폴백)
 │   ├── copy_policy.py          # 문구 품질 정책/재시도
-│   ├── quality_gate.py         # 이미지 best-of-N 구도 선별
+│   ├── quality_gate.py         # 이미지 best-of-N 선별 (구도·액센트 색)
 │   ├── job_store.py            # 비동기 이미지 잡 큐 (jsonl)
 │   ├── result_cache.py         # 생성 결과 캐시
 │   ├── runtime_workers.py      # GPU 워커 수명주기 (GPU_WORKER_MODE)
