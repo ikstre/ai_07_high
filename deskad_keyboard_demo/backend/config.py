@@ -120,6 +120,10 @@ class Settings:
     # 활성. 평면 색블록 img2img로는 "사진+정확 배열"을 동시에 못 얻어(2026-06-16 A/B),
     # GLB depth로 배열을 denoise와 독립적으로 고정하기 위한 노브.
     comfyui_controlnet_model: str = os.getenv("COMFYUI_CONTROLNET_MODEL", "")
+    # ControlNet을 적용할 denoise 구간의 끝(0~1). 1.0=전 스텝 적용(구조 강하게 고정),
+    # <1.0이면 초기 스텝에만 적용하고 후반은 모델이 자유롭게 디테일을 그려 사진감을 살린다
+    # → strength를 높여 배열을 단단히 잡으면서도 평면화를 완화하는 직교 레버(0.5~0.8 권장).
+    comfyui_controlnet_end_percent: float = _float_env("COMFYUI_CONTROLNET_END_PERCENT", 1.0, lo=0.0, hi=1.0)
     # best-of-N: depth-ControlNet은 grayscale라 색을 못 잠근다 → N장(batch)을 뽑아 스펙
     # 액센트 색이 가장 충실한 컷을 quality_gate가 고른다. 1=비활성(1장). 클수록 액센트
     # 충실도↑·생성시간/ VRAM↑(단일 L4 권장 2~4). flux_controlnet_depth의 batch_size에 적용
@@ -289,6 +293,7 @@ def redacted_settings() -> dict:
         "comfyui_composition_denoise": settings.comfyui_composition_denoise,
         "comfyui_controlnet_model": settings.comfyui_controlnet_model or "unset",
         "comfyui_controlnet_strength": settings.comfyui_controlnet_strength,
+        "comfyui_controlnet_end_percent": settings.comfyui_controlnet_end_percent,
         "comfyui_best_of_n": settings.comfyui_best_of_n,
         "flux_model_variant": settings.flux_model_variant or "unset",
         "image_quantization": settings.image_quantization or "unset",

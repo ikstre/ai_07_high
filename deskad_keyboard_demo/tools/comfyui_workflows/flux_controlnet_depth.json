@@ -62,7 +62,7 @@
       "image": ["22", 0],
       "strength": "{controlnet_strength}",
       "start_percent": 0.0,
-      "end_percent": 1.0,
+      "end_percent": "{controlnet_end_percent}",
       "vae": ["5", 0]
     }
   },

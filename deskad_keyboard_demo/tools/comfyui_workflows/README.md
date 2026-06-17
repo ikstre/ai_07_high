@@ -36,6 +36,7 @@
 | `{controlnet_model}` | `COMFYUI_CONTROLNET_MODEL` | ControlNet 모델 파일명(models/controlnet/ 기준). `flux_controlnet_depth`가 사용 |
 | `{controlnet_image_name}` | 셋업 GLB depth 자동 렌더·업로드 | 워크플로에 이 토큰이 있으면 `model_url`의 GLB를 헤드리스(OSMesa) 렌더한 depth PNG를 ComfyUI `/upload/image`에 올려 LoadImage 파일명으로 치환. GLB 미해석/실패 시 워크플로 미구동(draft) |
 | `{controlnet_strength}` | `COMFYUI_CONTROLNET_STRENGTH` | float (기본 0.0). depth-ControlNet 충실도 노브 |
+| `{controlnet_end_percent}` | `COMFYUI_CONTROLNET_END_PERCENT` | float 0~1 (기본 1.0). ControlNet 적용 구간 끝. <1.0=초기 스텝만(후반 사진 자유화) |
 | `{batch_size}` | `COMFYUI_BEST_OF_N` | int 1~8 (기본 1). best-of-N: N장 생성 후 액센트 색이 가장 충실한 컷 자동 선택 |
 | `{denoise}` | `COMFYUI_IMG2IMG_DENOISE` / `COMFYUI_COMPOSITION_DENOISE` | float. 셋업 구도 맵 reference는 composition denoise 사용 |
 | `{reference_image_name}` | 선택 도면/셋업 구도 맵 자동 업로드 | 워크플로에 이 토큰이 있으면 `_reference_image_b64`의 래스터를 ComfyUI `/upload/image`에 올려 LoadImage 파일명으로 치환. 레퍼런스 없으면 워크플로 미구동(draft) |

@@ -223,6 +223,7 @@ def make_image_cache_key(
             # (파일 내용은 동일) → strength 스윕이 캐시에 막히지 않도록 키에 직접 넣는다.
             "controlnet_model": os.getenv("COMFYUI_CONTROLNET_MODEL", ""),
             "controlnet_strength": os.getenv("COMFYUI_CONTROLNET_STRENGTH", ""),
+            "controlnet_end_percent": os.getenv("COMFYUI_CONTROLNET_END_PERCENT", ""),
             "best_of_n": os.getenv("COMFYUI_BEST_OF_N", ""),
         },
         sort_keys=True,

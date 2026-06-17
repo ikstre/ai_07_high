@@ -3172,6 +3172,7 @@ def _workflow_placeholder_mapping(
         "controlnet_image": settings.comfyui_controlnet_image,
         "controlnet_strength": settings.comfyui_controlnet_strength,
         "controlnet_model": settings.comfyui_controlnet_model,
+        "controlnet_end_percent": settings.comfyui_controlnet_end_percent,
         # best-of-N: ControlNet 워크플로의 EmptyLatentImage batch_size. 1~8 클램프.
         "batch_size": max(1, min(int(settings.comfyui_best_of_n or 1), 8)),
         "denoise": settings.comfyui_img2img_denoise if denoise is None else denoise,
@@ -3518,6 +3519,77 @@ def _fail_stale_hyperclova_job(job: dict) -> dict:
     return IMAGE_JOB_STORE.save(job)
 
 
+def _is_oom_error(status_info: dict) -> bool:
+    """ComfyUI 실행 에러가 CUDA OOM인지 메시지 텍스트 시그니처로 판정."""
+    try:
+        text = json.dumps(status_info.get("messages", []), ensure_ascii=False).lower()
+    except Exception:
+        text = str(status_info).lower()
+    return "out of memory" in text or "outofmemory" in text or "cuda oom" in text
+
+
+def _maybe_retry_oom_lower_batch(job: dict, record: dict, status_info: dict, settings) -> bool:
+    """OOM이면 batch_size를 반감해 재제출(best-of-N batch가 단일 L4 VRAM을 넘는 경우 대응).
+
+    제출했던 워크플로는 ComfyUI history record["prompt"][2]에 있으므로 거기서 받아
+    EmptyLatentImage.batch_size를 절반(4→2→1)으로 낮춰 같은 depth·프롬프트로 재제출한다
+    (depth 입력 파일은 ComfyUI input에 남아 재사용). batch가 이미 1이거나 OOM이 아니거나
+    재시도 4회 초과면 False(호출부가 failed 처리). 성공하면 job을 queued로 돌리고 True.
+    """
+    if not _is_oom_error(status_info):
+        return False
+    retries = job.get("oom_retries")
+    if not isinstance(retries, list):
+        retries = []
+    if len(retries) >= 4:
+        return False  # 안전 캡(무한 재시도 방지)
+    prompt_item = record.get("prompt") if isinstance(record, dict) else None
+    workflow = (
+        prompt_item[2]
+        if isinstance(prompt_item, list) and len(prompt_item) > 2 and isinstance(prompt_item[2], dict)
+        else None
+    )
+    if not isinstance(workflow, dict):
+        return False
+    node = next(
+        (
+            n
+            for n in workflow.values()
+            if isinstance(n, dict)
+            and n.get("class_type") == "EmptyLatentImage"
+            and isinstance(n.get("inputs"), dict)
+        ),
+        None,
+    )
+    if node is None:
+        return False
+    try:
+        cur = int(node["inputs"].get("batch_size", 1))
+    except (TypeError, ValueError):
+        return False
+    if cur <= 1:
+        return False  # 더 줄일 수 없음 = batch와 무관한 OOM → 진짜 실패
+    new = max(1, cur // 2)
+    node["inputs"]["batch_size"] = new
+    try:
+        response = requests.post(
+            f"{settings.comfyui_base_url.rstrip('/')}/prompt",
+            json={"prompt": workflow, "client_id": job["job_id"]},
+            timeout=settings.request_timeout_seconds,
+        )
+        response.raise_for_status()
+        new_prompt_id = response.json().get("prompt_id")
+    except Exception:
+        return False
+    if not new_prompt_id:
+        return False
+    job["comfyui_prompt_id"] = new_prompt_id
+    job["status"] = "queued"
+    retries.append({"from_batch": cur, "to_batch": new, "at": int(time.time())})
+    job["oom_retries"] = retries
+    return True
+
+
 def poll_image_job(job_id: str) -> dict | None:
     job = IMAGE_JOB_STORE.get(job_id)
     if not job:
@@ -3545,6 +3617,10 @@ def poll_image_job(job_id: str) -> dict | None:
             return public_image_job(job)
         status_info = record.get("status", {}) if isinstance(record, dict) else {}
         if status_info.get("status_str") == "error":
+            # OOM이면 batch를 낮춰 재시도(best-of-N batch가 VRAM 초과 시). 성공하면 queued로
+            # 되돌아가 다음 폴링이 이어받는다(워커 유지). 아니면 failed.
+            if _maybe_retry_oom_lower_batch(job, record, status_info, settings):
+                return public_image_job(IMAGE_JOB_STORE.save(job))
             job.update({"status": "failed", "error": status_info.get("messages", "ComfyUI workflow failed")})
             saved_job = IMAGE_JOB_STORE.save(job)
             _maybe_release_comfyui_worker(saved_job)
