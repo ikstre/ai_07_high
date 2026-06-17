@@ -8,6 +8,7 @@ import streamlit as st
 
 from .constants import KEYBOARD_MODEL_DEFAULTS, STEP_LABELS
 from .defaults import DEFAULTS
+from .theme import DEFAULT_THEME_MODE, THEME_OPTIONS
 
 REQUIRED_PRODUCT_FIELDS = {
     "product_name": "상품명",
@@ -29,6 +30,9 @@ def initialize_session_defaults(defaults: dict = DEFAULTS) -> None:
 
     if st.session_state.step_selector != st.session_state.step:
         st.session_state.step_selector = st.session_state.step
+
+    if st.session_state.get("ui_theme_mode") not in THEME_OPTIONS:
+        st.session_state.ui_theme_mode = DEFAULT_THEME_MODE
 
 
 def sync_layout_from_model() -> None:

@@ -244,7 +244,7 @@ def _render_login_page_styles() -> None:
             min-height: 640px;
             border: 1px solid rgba(125, 211, 252, 0.22);
             border-radius: 22px;
-            padding: 58px 60px;
+            padding: 58px 54px;
             background:
               linear-gradient(90deg, rgba(8, 13, 24, 0.88) 0%, rgba(8, 13, 24, 0.58) 54%, rgba(8, 13, 24, 0.18) 100%),
               radial-gradient(circle at 82% 24%, rgba(56, 189, 248, 0.36), transparent 32%),
@@ -254,21 +254,6 @@ def _render_login_page_styles() -> None:
             box-shadow: 0 30px 90px rgba(15, 23, 42, 0.24);
             overflow: hidden;
             position: relative;
-          }
-
-          .deskad-login-brand::after {
-            content: "";
-            position: absolute;
-            right: 48px;
-            bottom: 44px;
-            width: 250px;
-            height: 160px;
-            border-radius: 18px;
-            background:
-              linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.04)),
-              rgba(15, 23, 42, 0.24);
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            box-shadow: 0 24px 64px rgba(2, 6, 23, 0.22);
           }
 
           .deskad-login-kicker {
@@ -286,26 +271,27 @@ def _render_login_page_styles() -> None:
           }
 
           .deskad-login-brand h1 {
-            max-width: 720px;
-            margin: 34px 0 18px 0;
-            font-size: 64px;
-            line-height: 1.04;
+            max-width: 620px;
+            margin: 32px 0 18px 0;
+            font-size: 52px;
+            line-height: 1.08;
             letter-spacing: 0;
+            word-break: keep-all;
           }
 
           .deskad-login-brand p {
             max-width: 640px;
             margin: 0;
             color: rgba(255, 255, 255, 0.78);
-            font-size: 19px;
-            line-height: 1.7;
+            font-size: 17px;
+            line-height: 1.65;
           }
 
           .deskad-login-hero-actions {
             display: flex;
             flex-wrap: wrap;
             gap: 10px;
-            margin-top: 30px;
+            margin-top: 26px;
           }
 
           .deskad-login-hero-pill {
@@ -325,8 +311,8 @@ def _render_login_page_styles() -> None:
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 12px;
-            margin-top: 64px;
-            max-width: 700px;
+            margin-top: 42px;
+            max-width: 100%;
           }
 
           .deskad-login-feature {
@@ -334,8 +320,7 @@ def _render_login_page_styles() -> None:
             padding: 15px;
             border-radius: 14px;
             border: 1px solid rgba(255, 255, 255, 0.16);
-            background: rgba(15, 23, 42, 0.28);
-            backdrop-filter: blur(8px);
+            background: rgba(15, 23, 42, 0.36);
           }
 
           .deskad-login-feature strong {
@@ -456,7 +441,7 @@ def render_login_page() -> None:
             """
             <section class="deskad-login-brand">
               <div class="deskad-login-kicker">Campaign Production Studio</div>
-              <h1>키보드 광고 제작을 한 화면에서 끝내세요.</h1>
+              <h1>키보드 광고 제작을<br>한 화면에서 끝내세요.</h1>
               <p>
                 제품 정보, 3D 데스크 셋업, 광고 문구, 이미지 작업, 포스터 제작을
                 단계별로 이어서 검수하는 DeskAd AI 제작 스튜디오입니다.

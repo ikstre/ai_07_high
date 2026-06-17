@@ -8,7 +8,7 @@ import streamlit as st
 
 from .constants import STEP_LABELS
 from .login import logout
-from .theme import THEME_LABELS, THEME_OPTIONS
+from .theme import DEFAULT_THEME_MODE, THEME_LABELS, THEME_OPTIONS
 
 
 def _step_state_label(step_id: int, current_step: int) -> str:
@@ -17,6 +17,18 @@ def _step_state_label(step_id: int, current_step: int) -> str:
     if step_id == current_step:
         return "진행 중"
     return "대기"
+
+
+def _bind_theme_widget_state() -> None:
+    current = st.session_state.get("ui_theme_mode", DEFAULT_THEME_MODE)
+    if current not in THEME_OPTIONS:
+        current = DEFAULT_THEME_MODE
+    st.session_state["_ui_theme_mode_input"] = current
+
+
+def _sync_theme_mode() -> None:
+    selected = st.session_state.get("_ui_theme_mode_input", DEFAULT_THEME_MODE)
+    st.session_state.ui_theme_mode = selected if selected in THEME_OPTIONS else DEFAULT_THEME_MODE
 
 
 def render_sidebar(on_step_change: Callable[[], None]) -> None:
@@ -60,12 +72,14 @@ def render_sidebar(on_step_change: Callable[[], None]) -> None:
         st.divider()
 
         st.markdown("### 화면 모드")
+        _bind_theme_widget_state()
         st.radio(
             "UI 테마",
             options=THEME_OPTIONS,
             format_func=lambda value: THEME_LABELS[value],
             label_visibility="collapsed",
-            key="ui_theme_mode",
+            key="_ui_theme_mode_input",
+            on_change=_sync_theme_mode,
         )
 
         st.divider()
