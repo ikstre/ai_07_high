@@ -1,6 +1,6 @@
 import re
 
-from backend.ai import _wrap, create_svg_poster, safe_image_reference
+from backend.ai import _wrap, create_svg_poster, normalize_selected_copy, safe_image_reference
 
 
 def _payload(template: str, ratio: str = "1:1") -> dict:
@@ -26,7 +26,8 @@ def _copy() -> dict:
 
 def test_minimal_card_cta_pill_uses_dynamic_width_and_centered_text():
     svg = create_svg_poster(_payload("minimal_card"), _copy())
-    widths = [int(value) for value in re.findall(r'<rect x="86" y="961" width="(\d+)" height="62"', svg)]
+    # CTA pill은 바닥 고정(flow)이라 y는 레이아웃에 따라 달라질 수 있다 — 폭/중앙정렬 의도만 검증.
+    widths = [int(value) for value in re.findall(r'<rect x="86" y="\d+" width="(\d+)" height="62"', svg)]
 
     assert widths
     assert max(widths) <= int(1080 * 0.44)
@@ -122,6 +123,33 @@ def test_minimal_card_long_spaceless_headline_renders_multiple_lines():
     assert any("책상위에놓는순간" in seg and "프리미엄커스텀키보드" not in seg for seg in headline_chunks)
 
 
+def test_minimal_card_keeps_full_long_subcopy_without_ellipsis():
+    copy = _copy()
+    copy["subcopy"] = (
+        "조용한 타건감과 크림 톤 키캡, 작은 책상에도 잘 맞는 65% 배열을 한 장의 포스터 안에 "
+        "모두 담아 고객이 제품의 분위기와 핵심 장점을 놓치지 않게 보여주는 설명 문구 마지막혜택"
+    )
+    svg = create_svg_poster(_payload("minimal_card"), copy)
+
+    assert "마지막혜택" in svg
+    assert "…" not in svg
+
+
+def test_selected_copy_normalization_keeps_long_display_text():
+    long_headline = "선택 편집 문구가 포스터 생성 직전에 잘리지 않는지 확인하는 긴 헤드라인 " * 3 + "마지막문구"
+    selected = normalize_selected_copy(
+        {
+            "target_channel": "유튜브 쇼츠",
+            "selected_copy": {"headline": long_headline, "subcopy": "서브카피", "cta": "확인하기"},
+        }
+    )
+
+    assert selected is not None
+    assert "마지막문구" in selected["headline"]
+    assert "…" not in selected["headline"]
+    assert selected["policy"]["length_enforced"] is False
+
+
 def test_safe_image_reference_redacts_multiple_images_and_reports_count():
     public = safe_image_reference(
         {
@@ -140,7 +168,6 @@ def test_safe_image_reference_redacts_multiple_images_and_reports_count():
 # ── 2026-06-11 이미지 QA(1.md): SPEC 카드 줄바꿈/폰트 축소 ─────────────────────
 def _spec_card_lines(svg: str) -> list[tuple[int, int, str]]:
     """(x, font_size, text)를 SPEC 카드 영역 bullet 라인만 추려 반환."""
-    from backend.ai import _ratio_size
 
     lines = []
     for m in re.finditer(r'<text x="(\d+)" y="\d+" font-size="(\d+)" fill="[^"]+">([^<]*)</text>', svg):

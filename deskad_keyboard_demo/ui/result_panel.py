@@ -5,7 +5,7 @@ from __future__ import annotations
 import streamlit as st
 import streamlit.components.v1 as components
 
-from ui_steps import render_step_input_panel
+from .steps import render_step_input_panel
 
 from .constants import IMAGE_JOB_TERMINAL_STATUSES, KEYBOARD_SIZE_INFO, MONITOR_SIZES, POSTER_TEMPLATE_LABELS, STEP_LABELS
 
@@ -122,7 +122,7 @@ def _render_poster_downloads(poster: dict, poster_svg: str) -> None:
         use_container_width=True,
     )
     try:
-        from ppt_export import build_poster_pptx
+        from .ppt_export import build_poster_pptx
         from .ad_content import current_product_export_payload
 
         pptx_data = build_poster_pptx(
@@ -158,7 +158,7 @@ def _render_poster_result(poster: dict) -> None:
 
 
 def _render_ad_preview() -> None:
-    from .ad_content import render_ad_card_preview_section
+    from .ad_content import auto_poll_image_job, render_ad_card_preview_section
     from .components import render_studio_status_cards
 
     st.markdown("### 광고 미리보기")
@@ -200,7 +200,7 @@ def _render_step_content(ctx: dict, go_previous, go_next) -> None:
 
 
 def _render_poster_details() -> None:
-    from .ad_content import auto_poll_image_job, refresh_image_job
+    from .ad_content import generate_image_job, refresh_image_job
     from .api_client import api_post
 
     with st.expander("포스터 / 이미지 작업 상세", expanded=False):

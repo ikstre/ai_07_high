@@ -51,8 +51,9 @@ GLOBAL_REPLACEMENTS = {
     "임상": "",
 }
 
-# subcopy_max는 포스터 가독성과 제품 상세 설명을 함께 맞추기 위해 상향했다.
-# 포스터 SVG가 2~3줄로 wrap하므로 제품 마감/색상/타건감이 정책 단계에서 과하게 잘리는 것을 줄인다.
+# max 값은 생성 모델에 전달하던 채널별 권장 길이 메타데이터로만 남긴다.
+# 최종 포스터 합성 단계에서 사용자가 선택/수정한 문구가 잘리지 않도록 정책 단계는
+# 금지 표현 치환과 해시태그 개수만 적용하고 본문 길이는 자르지 않는다.
 CHANNEL_POLICY = {
     "인스타그램": {"headline_max": 28, "subcopy_max": 84, "cta_max": 16, "hashtag_limit": 6},
     "스마트스토어": {"headline_max": 32, "subcopy_max": 90, "cta_max": 16, "hashtag_limit": 4},
@@ -88,12 +89,6 @@ def _sanitize_text(text: object, flagged_terms: set[str]) -> str:
     return _compact_spaces(value)
 
 
-def _truncate(value: str, limit: int) -> str:
-    if len(value) <= limit:
-        return value
-    return value[: max(0, limit - 1)].rstrip() + "…"
-
-
 def _sanitize_hashtag(value: object, flagged_terms: set[str]) -> str:
     tag = str(value or "").strip()
     if not tag:
@@ -112,15 +107,15 @@ def apply_copy_policy(payload: dict, result: dict) -> dict:
     flagged_terms: set[str] = set()
     output = dict(result)
 
-    output["headline"] = _truncate(_sanitize_text(output.get("headline", ""), flagged_terms), policy["headline_max"])
-    output["subcopy"] = _truncate(_sanitize_text(output.get("subcopy", ""), flagged_terms), policy["subcopy_max"])
-    output["cta"] = _truncate(_sanitize_text(output.get("cta", ""), flagged_terms), policy["cta_max"])
+    output["headline"] = _sanitize_text(output.get("headline", ""), flagged_terms)
+    output["subcopy"] = _sanitize_text(output.get("subcopy", ""), flagged_terms)
+    output["cta"] = _sanitize_text(output.get("cta", ""), flagged_terms)
 
     copies = [_sanitize_text(copy, flagged_terms) for copy in output.get("copies", [])]
-    output["copies"] = [copy for copy in copies if copy][:5]
+    output["copies"] = [copy for copy in copies if copy]
 
     spec_bullets = [_sanitize_text(bullet, flagged_terms) for bullet in output.get("spec_bullets", [])]
-    output["spec_bullets"] = [bullet for bullet in spec_bullets if bullet][:5]
+    output["spec_bullets"] = [bullet for bullet in spec_bullets if bullet]
 
     hashtag_limit = int(policy["hashtag_limit"])
     hashtags = [_sanitize_hashtag(tag, flagged_terms) for tag in output.get("hashtags", [])]
@@ -132,6 +127,7 @@ def apply_copy_policy(payload: dict, result: dict) -> dict:
         "subcopy_max": policy["subcopy_max"],
         "cta_max": policy["cta_max"],
         "hashtag_limit": hashtag_limit,
+        "length_enforced": False,
         "flagged_terms": sorted(flagged_terms),
     }
     return output

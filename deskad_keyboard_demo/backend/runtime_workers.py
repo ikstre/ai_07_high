@@ -542,13 +542,10 @@ def ensure_hyperclova_image_worker() -> bool:
 # ── 트랙(생성 엔진) 선택 기점 워밍업 ──────────────────────────────────────────
 
 # 트랙 → 미리 워밍업할 워커. openai는 API만 쓰므로 로컬 GPU를 전부 비운다.
-# 트랙별 예열 GPU 워커. 이미지 2트랙 정리(2026-06-16) 후 hyperclova도 이미지는 ComfyUI("image")로
-# 렌더하므로 Omni 이미지 워커("hyperclova_image") 대신 ComfyUI 이미지 워커를 예열한다(local과 동일).
-# Omni 네이티브 이미지는 IMAGE_MODEL_BACKEND=hyperclova로만 도달 — 트랙 예열 대상이 아니다.
-# (hyperclova vision(:11601)은 카피 단계에서 도면 입력이 있을 때만 on-demand 기동.)
+# 트랙별 예열 GPU 워커. local+ComfyUI는 ComfyUI 이미지 워커를 예열한다.
+# HyperCLOVA는 별도 사용자 트랙에서 제외됐으며, 텍스트 provider/레거시 이미지 backend 코드는 보존한다.
 _TRACK_WARM_WORKERS = {
     "openai": [],
-    "hyperclova": ["image"],
     "local": ["image"],
 }
 
@@ -559,7 +556,7 @@ def track_warm_plan(track: str) -> list[str] | None:
 
 
 def activate_track(track: str) -> dict:
-    """3트랙(생성 엔진) 선택 시점에 해당 GPU 워커를 백그라운드로 워밍업한다.
+    """생성 엔진 선택 시점에 해당 GPU 워커를 백그라운드로 워밍업한다.
 
     모델 리로드가 ~75s라 호출자는 블로킹하지 않고 daemon thread로 진행한다.
     여기 실패해도 실제 job 경로의 ensure_*_worker가 다시 보장하므로 치명적이지 않다.

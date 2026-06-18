@@ -58,7 +58,7 @@ def build_ad_payload() -> dict:
         "image_job_id": current_image_job_id(),
         "image_workflow": st.session_state.image_workflow,
         "poster_template": st.session_state.poster_template,
-        "engine": st.session_state.get("engine", "hyperclova"),
+        "engine": st.session_state.get("engine", "local"),
         "engine_model_tier": st.session_state.get("engine_model_tier", "general"),
     }
     # 셋업 구도 맵을 img2img 기준으로 주입(reference_image_b64는 선택 도면보다 우선).
@@ -82,9 +82,9 @@ def selected_copy_payload(copy_result: dict | None) -> dict | None:
         "headline": copy_result.get("headline") or "",
         "subcopy": copy_result.get("subcopy") or "",
         "cta": copy_result.get("cta") or "",
-        "copies": list(copy_result.get("copies") or [])[:5],
-        "hashtags": list(copy_result.get("hashtags") or [])[:6],
-        "spec_bullets": list(copy_result.get("spec_bullets") or [])[:5],
+        "copies": list(copy_result.get("copies") or []),
+        "hashtags": list(copy_result.get("hashtags") or []),
+        "spec_bullets": list(copy_result.get("spec_bullets") or []),
     }
     if not selected["headline"] and not selected["copies"]:
         return None
@@ -140,9 +140,9 @@ def render_copy_inline_editor(copy_result: dict | None) -> None:
         return
     sync_copy_editor_state(copy_result)
     with st.form("copy_inline_editor", border=True):
-        st.text_input("헤드라인", key="copy_editor_headline", max_chars=80)
-        st.text_area("서브카피", key="copy_editor_subcopy", height=88, max_chars=160)
-        st.text_input("CTA", key="copy_editor_cta", max_chars=40)
+        st.text_area("헤드라인", key="copy_editor_headline", height=68)
+        st.text_area("서브카피", key="copy_editor_subcopy", height=120)
+        st.text_input("CTA", key="copy_editor_cta")
         submitted = st.form_submit_button("문구 업데이트", use_container_width=True)
     if submitted:
         apply_copy_editor_changes()
@@ -161,9 +161,9 @@ def generate_copy() -> None:
     st.session_state.copy_selected_provider = st.session_state.copy_result.get("provider")
 
 def generate_copy_experiment() -> None:
-    # 3개 평가 트랙(엔진)을 항상 같은 입력으로 나란히 비교한다. 미설정 엔진은
-    # not_configured로 표시돼 어떤 트랙이 활성인지 한눈에 보인다.
-    payload = {**build_ad_payload(), "providers": ["openai", "hyperclova", "local", "fallback"]}
+    # 텍스트 provider를 같은 입력으로 나란히 비교한다. 미설정 provider는
+    # not_configured로 표시돼 어떤 모델이 활성인지 한눈에 보인다.
+    payload = {**build_ad_payload(), "providers": ["openai", "hyperclova", "local", "kanana", "midm", "fallback"]}
     st.session_state.copy_experiment_result = api_post("/ai/copy/experiment", payload, timeout=300)
     provider, selected = first_successful_copy(st.session_state.copy_experiment_result)
     st.session_state.copy_result = selected
@@ -178,20 +178,20 @@ def _apply_copy_variants_result(data: dict) -> None:
 
 
 def generate_copy_variants() -> None:
-    # 선택한 엔진에서 문구 변형 3-4개를 뽑아 나란히 비교/선택한다(로컬처럼 모델 결과로 고른다).
-    _apply_copy_variants_result(api_post("/ai/copy/variants", build_ad_payload(), timeout=400))
+    # 선택한 엔진에서 문구 후보를 뽑아 나란히 비교/선택한다.
+    # Local+ComfyUI는 HyperCLOVA/base/Kanana/Mi:dm provider별 후보를 반환한다.
+    _apply_copy_variants_result(api_post("/ai/copy/variants", build_ad_payload(), timeout=900))
 
 
 def generate_copy_variants_live(slot) -> None:
     """버튼 슬롯을 실시간 게이지로 바꿔가며 문구 변형을 생성한다."""
     payload = build_ad_payload()
-    # hyperclova 트랙은 GPU 워커 교체(~110s)가 겹칠 수 있어 기준선을 엔진별로 둔다.
-    expected = {"hyperclova": 150, "local": 60, "openai": 30}.get(
+    expected = {"local": 180, "openai": 30}.get(
         str(st.session_state.get("engine") or ""), 90
     )
     data = run_with_live_progress(
         slot,
-        lambda: api_post("/ai/copy/variants", payload, timeout=400),
+        lambda: api_post("/ai/copy/variants", payload, timeout=900),
         label="광고 문구 생성 중",
         expected_seconds=expected,
     )
@@ -232,8 +232,6 @@ def generate_image_job(force_regen: bool = False) -> dict:
     # 재시도 UX — 2026-06-11 이미지 QA). 서버/워커가 seed를 랜덤화하므로 새 결과가 나온다.
     path = "/ai/image/jobs?force_regen=true" if force_regen else "/ai/image/jobs"
     payload = build_ad_payload()
-    # 문구 엔진과 이미지 백엔드는 역할이 다르므로 이미지 작업은 OpenAI 이미지 백엔드를 우선 사용한다.
-    payload["engine"] = "openai"
     data = api_post(path, payload, timeout=180)
     st.session_state.image_job_result = data
     copy_result = data.get("copy") if isinstance(data, dict) else None
@@ -299,24 +297,37 @@ def auto_poll_image_job() -> None:
 
     # 엔진별 통상 소요(초). 정확한 ETA가 아니라 "얼마나 기다리는 게 정상인지"의
     # 기준선 — 게이지는 97%에서 멈춰 완료를 단정하지 않는다(2026-06-11 이미지 QA).
-    # hyperclova: prefill + steps 30 적용 후 warm 장당 ~230s, 워커 적재 포함 ~300s
-    # (2026-06-13 GPU A/B 실측).
     expected = {"hyperclova_image": 300, "comfyui": 120, "openai_image": 90}.get(
         str(job.get("provider") or ""), 180
     ) * image_count
     status_slot = st.empty()
     with status_slot.container(border=True):
-        st.progress(
-            min(elapsed / expected, 0.97),
-            text=(
-                f"이미지 생성 중 · {job.get('status', 'unknown')} · "
-                f"{int(elapsed)}초 경과 (이 엔진은 보통 ~{expected}초)"
-            ),
-        )
-        if job.get("message"):
-            st.caption(str(job["message"]))
-        if job.get("provider") == "hyperclova_image":
-            st.caption("HyperCLOVA 이미지는 GPU 모델 적재가 겹치면 최대 7분까지 걸릴 수 있어요. 완료되면 결과 영역에 자동 반영됩니다.")
+        shot_jobs = job.get("comfyui_shot_jobs") or []
+        if shot_jobs:
+            # 작업 기반 진행: 시점별 컷이 몇 개 끝났는지(시간 추정이 아니라 실제 진척).
+            total = len(shot_jobs)
+            done = sum(1 for s in shot_jobs if s.get("status") == "completed")
+            running = sum(1 for s in shot_jobs if s.get("status") == "running")
+            frac = min((done + 0.5 * running) / max(total, 1), 0.97)
+            st.progress(frac, text=f"이미지 생성 · 시점별 {done}/{total}컷 완료 ({int(elapsed)}초 경과)")
+            icon = {"completed": "✅", "running": "🟢", "queued": "⏳", "pending": "·", "error": "⚠️"}
+            st.caption(
+                " · ".join(
+                    f"{icon.get(s.get('status'), '·')} {s.get('label') or s.get('shot_type')}"
+                    for s in shot_jobs
+                )
+            )
+        else:
+            # 단일 이미지는 작업 단위 신호가 없어 시간 추정 게이지(명시적으로 '추정'이라 표기).
+            stage = {"created": "준비 중", "queued": "큐 대기 중", "running": "생성 중"}.get(
+                str(job.get("status")), str(job.get("status", "진행 중"))
+            )
+            st.progress(
+                min(elapsed / expected, 0.97),
+                text=f"이미지 {stage} · {int(elapsed)}초 경과 (시간 추정 · 보통 ~{expected}초)",
+            )
+            if job.get("message"):
+                st.caption(str(job["message"]))
     try:
         updated = refresh_image_job() or job
     except Exception as exc:
@@ -429,7 +440,7 @@ def render_copy_experiment_picker() -> None:
                             st.rerun()
 
 
-def render_compact_copy_candidates(limit: int = 3) -> None:
+def render_compact_copy_candidates(limit: int = 4) -> None:
     experiment = st.session_state.copy_experiment_result
     if not experiment:
         st.caption("광고 문구를 생성하면 후보가 여기에 표시됩니다.")
@@ -482,8 +493,7 @@ def render_compact_copy_candidates(limit: int = 3) -> None:
 
 
 def render_ad_card_preview_section() -> None:
-    ad_left, ad_right = st.columns([0.70, 0.30])
-    with ad_left:
+    with st.container():
         st.markdown("#### 광고 카드 미리보기")
         result = st.session_state.copy_result or {}
         product_name = str(st.session_state.get("product_name") or "").strip() or "상품명을 입력해주세요"
@@ -564,23 +574,26 @@ def render_ad_card_preview_section() -> None:
             """,
             unsafe_allow_html=True,
         )
-    with ad_right:
-        st.markdown("#### 문구 후보")
-        render_compact_copy_candidates()
 
-        st.markdown("#### 선택 문구")
-        result = st.session_state.copy_result
-        if result:
-            st.caption(f"선택 provider: {provider_label(st.session_state.get('copy_selected_provider') or result.get('provider'))}")
-            with st.expander("선택 문구 편집", expanded=False):
-                render_copy_inline_editor(result)
-            for copy in result.get("copies", [])[:3]:
-                st.write(f"- {copy}")
-            st.caption(" ".join(result.get("hashtags", [])))
-            if result.get("error"):
-                st.caption(f"fallback note: {result['error']}")
+    if st.session_state.copy_experiment_result:
+        render_copy_experiment_picker()
+    else:
+        st.markdown("#### 문구 후보")
+        st.caption("광고 콘텐츠 단계에서 문구를 생성하면 후보가 여기에 표시됩니다.")
+
+    st.markdown("#### 선택 문구")
+    result = st.session_state.copy_result
+    if result:
+        st.caption(f"선택 provider: {provider_label(st.session_state.get('copy_selected_provider') or result.get('provider'))}")
+        with st.expander("선택 문구 편집", expanded=False):
+            render_copy_inline_editor(result)
+        for copy in result.get("copies", [])[:3]:
+            st.write(f"- {copy}")
+        st.caption(" ".join(result.get("hashtags", [])))
+        if result.get("error"):
+            st.caption(f"fallback note: {result['error']}")
+    else:
+        if st.session_state.copy_experiment_result:
+            st.caption("광고 콘텐츠 단계의 후보 카드에서 사용할 문구를 선택하세요.")
         else:
-            if st.session_state.copy_experiment_result:
-                st.caption("광고 콘텐츠 단계의 후보 카드에서 사용할 문구를 선택하세요.")
-            else:
-                st.caption("광고 콘텐츠 단계에서 문구를 생성하면 여기에 표시됩니다.")
+            st.caption("광고 콘텐츠 단계에서 문구를 생성하면 여기에 표시됩니다.")

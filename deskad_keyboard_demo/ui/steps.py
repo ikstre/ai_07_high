@@ -6,8 +6,8 @@ from typing import Any
 
 import streamlit as st
 
-from ui.constants import IMAGE_JOB_TERMINAL_STATUSES
-from ui.state import PRODUCT_FIELD_ERROR_KEY, missing_product_fields
+from .constants import IMAGE_JOB_TERMINAL_STATUSES
+from .state import PRODUCT_FIELD_ERROR_KEY, missing_product_fields
 
 
 PRODUCT_TYPE_OPTIONS = ["커스텀 키보드", "키캡", "데스크매트", "데스크 조명", "모니터암", "데스크 소품", "번들 셋업"]
@@ -17,11 +17,10 @@ DRAWING_UPLOAD_OPTIONS = ["샘플 JSON 사용", "STEP/GLB 파일 업로드"]
 THEME_OPTIONS = ["minimal", "pastel", "premium", "gaming"]
 AD_TONE_OPTIONS = ["프리미엄형", "감성형", "할인형", "기능강조형"]
 IMAGE_RATIO_OPTIONS = ["1:1", "4:5", "16:9"]
-ENGINE_OPTIONS = ["hyperclova", "openai", "local"]
+ENGINE_OPTIONS = ["openai", "local"]
 ENGINE_LABELS = {
-    "hyperclova": "HyperCLOVA · 전용 로컬",
     "openai": "OpenAI API",
-    "local": "로컬 텍스트 + ComfyUI",
+    "local": "로컬 + ComfyUI",
 }
 ENGINE_TIER_OPTIONS = ["general", "performance"]
 ENGINE_TIER_LABELS = {
@@ -124,10 +123,10 @@ def _render_poster_template_cards(ctx: dict[str, Any]) -> None:
                 thumb = thumbnails.get(key)
                 if thumb:
                     st.markdown(thumb, unsafe_allow_html=True)
-    if st.session_state.poster_template == "grid_three" and st.session_state.get("engine") == "hyperclova":
+    if st.session_state.poster_template == "grid_three" and st.session_state.get("engine") == "local":
         st.info(
-            "HyperCLOVA 트랙의 Grid 3컷은 컷을 한 장씩 순차 생성해 보통 10~15분이 걸립니다. "
-            "생성 중 진행 상황이 표시되며, 빠른 결과가 필요하면 다른 템플릿이나 엔진을 선택하세요."
+            "로컬+ComfyUI 트랙의 Grid 3컷은 ComfyUI 작업으로 생성됩니다. "
+            "생성 중 진행 상황이 표시되며, 빠른 결과가 필요하면 다른 템플릿이나 OpenAI 엔진을 선택하세요."
         )
 
 
@@ -673,6 +672,8 @@ def _render_generic_asset_controls(asset_id: str, ctx: dict[str, Any]) -> None:
 
 def _render_ad_content_step(ctx: dict[str, Any]) -> None:
     st.markdown("#### 광고 콘텐츠")
+    if st.session_state.get("engine") not in ENGINE_OPTIONS:
+        st.session_state.engine = "local"
 
     def _on_engine_change() -> None:
         # 트랙 전환 시 해당 GPU 워커를 백엔드가 미리 워밍업(논블로킹, 단일 GPU exclusive).
@@ -818,7 +819,6 @@ def _render_ai_status(config_now: dict) -> None:
         config_now.get(key) == "set" for key in ("local_llm_base_url", "kanana_base_url", "midm_base_url")
     ) else "off"
     hyperclova_text_status = "on" if config_now.get("hyperclova_base_url") == "set" else "off"
-    hyperclova_image_status = "on" if config_now.get("hyperclova_image_configured") else "off"
     kanana_status = "on" if config_now.get("kanana_base_url") == "set" else "off"
     midm_status = "on" if config_now.get("midm_base_url") == "set" else "off"
     openai_text_status = "on" if config_now.get("openai_api_key") == "set" else "off"
@@ -826,11 +826,10 @@ def _render_ai_status(config_now: dict) -> None:
     comfyui_status = "on" if config_now.get("comfyui_base_url") == "set" else "off"
     st.caption(
         f"Tracks: OpenAI text/img {openai_text_status}/{openai_image_status} · "
-        f"HyperCLOVA text/img {hyperclova_text_status}/{hyperclova_image_status} · "
-        f"Local text/img {local_text_status}/{comfyui_status}"
+        f"Local+ComfyUI text/img {local_text_status}/{comfyui_status}"
     )
     st.caption(
-        f"Local text candidates: base {local_text_status} · Kanana {kanana_status} · Mi:dm {midm_status}"
+        f"Local text candidates: HyperCLOVA {hyperclova_text_status} · base {local_text_status} · Kanana {kanana_status} · Mi:dm {midm_status}"
     )
     st.caption(
         f"AI providers: OpenAI {openai_text_status} · HyperCLOVA {hyperclova_text_status} · "

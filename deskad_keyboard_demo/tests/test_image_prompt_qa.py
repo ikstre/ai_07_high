@@ -9,7 +9,7 @@ from backend.ai import (
     _COLOR_TEMP_BY_TONE,
     _IMAGE_DIRECTION_BY_TONE,
 )
-from ui_steps import TARGET_CHANNEL_OPTIONS, AD_TONE_OPTIONS
+from ui.steps import TARGET_CHANNEL_OPTIONS, AD_TONE_OPTIONS
 
 
 _BASE = {

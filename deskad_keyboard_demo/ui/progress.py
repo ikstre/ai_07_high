@@ -45,7 +45,7 @@ def run_with_live_progress(
         elapsed = time.monotonic() - started
         bar.progress(
             min(elapsed / max(expected_seconds, 1.0), 0.97),
-            text=f"{label} · {int(elapsed)}초 경과 (보통 ~{int(expected_seconds)}초)",
+            text=f"{label} · {int(elapsed)}초 경과 (시간 추정 · 보통 ~{int(expected_seconds)}초)",
         )
         thread.join(timeout=_TICK_SECONDS)
     if "error" in outcome:

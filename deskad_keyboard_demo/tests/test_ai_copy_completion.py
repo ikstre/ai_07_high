@@ -47,6 +47,11 @@ def test_complete_copy_payload_pads_short_model_result():
     assert len(result["subcopy"]) >= 35
     assert "65% 컴팩트 배열" in " ".join(result["copies"] + result["spec_bullets"])
     assert "silent red" in " ".join(result["copies"] + result["spec_bullets"])
+    # 색상 hex(#c8c1b2 등)가 사람이 읽는 카피에 새어 들어가면 안 되고,
+    # subcopy 폴백은 "…광고 카피" 같은 메타 묘사가 아니라 실제 카피 문장이어야 한다.
+    blob = " ".join([result["subcopy"], *result["copies"], *result["spec_bullets"]])
+    assert "#" not in blob
+    assert "광고 카피" not in blob
 
 
 def test_fallback_copy_returns_full_copy_set():
@@ -56,6 +61,9 @@ def test_fallback_copy_returns_full_copy_set():
     assert len(result["copies"]) == 5
     assert len(result["spec_bullets"]) >= 4
     assert len(result["subcopy"]) > 35
+    blob = " ".join([result["subcopy"], *result["copies"], *result["spec_bullets"]])
+    assert "#" not in blob
+    assert "광고 카피" not in blob
 
 
 def test_strip_reasoning_drops_think_block_with_braces():
@@ -102,5 +110,6 @@ def test_provider_specific_copy_timeout(monkeypatch):
         assert _copy_request_timeout(hyperclova) == 900
         assert _copy_request_timeout(local) == 300
         assert _copy_request_timeout(openai) == 45
+        assert _copy_request_timeout(local, {"_copy_request_timeout_override": 25}) == 25
     finally:
         get_settings.cache_clear()

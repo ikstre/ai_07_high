@@ -376,8 +376,8 @@ def accent_fidelity_score(
         h = 220
         w = max(1, round(im.width * h / im.height))
         arr = _np.asarray(im.resize((w, h)), dtype=_np.float32)
-        t, b, l, r = region
-        sub = arr[int(t * h) : int(b * h), int(l * w) : int(r * w)]
+        t, b, left, r = region
+        sub = arr[int(t * h) : int(b * h), int(left * w) : int(r * w)]
         if sub.size == 0:
             return None
         target = _np.array(accent_rgb, dtype=_np.float32)

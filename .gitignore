@@ -43,6 +43,17 @@ deskad_keyboard_demo/training/datasets/
 # Runtime job stores / quality reports
 deskad_keyboard_demo/data/runtime/
 
+# 작업일지/인수인계/실험리포트/CAD 레퍼런스 — 전용 폴더, 로컬 전용 (GitHub 비공개)
+deskad_keyboard_demo/worklogs/
+
+# docs/ 는 공식문서(사용설명서·보고서·가이드)만 공개한다 — 기본 무시 후 공식문서만 화이트리스트.
+# 새 작업일지를 docs/에 떨궈도 자동으로 비공개; 공식문서는 아래에 한 줄씩 추가해 공개한다.
+deskad_keyboard_demo/docs/*
+!deskad_keyboard_demo/docs/deploy.md
+!deskad_keyboard_demo/docs/security.md
+!deskad_keyboard_demo/docs/architecture.md
+!deskad_keyboard_demo/docs/schema.md
+
 # Large local model artifacts
 models/
 *.safetensors

@@ -74,7 +74,7 @@ DEFAULTS = {
     "ui_theme_mode": DEFAULT_THEME_MODE,
     "ad_tone": "감성형",
     "shot_type": "",
-    "engine": "hyperclova",
+    "engine": "local",
     "engine_model_tier": "general",
     "image_ratio": "1:1",
     "extra_request": "깔끔하고 고급스러운 데스크셋업 광고 느낌",

@@ -3,7 +3,7 @@ from zipfile import ZipFile
 
 from PIL import Image
 
-from ppt_export import build_poster_pptx, poster_svg_to_png
+from ui.ppt_export import build_poster_pptx, poster_svg_to_png
 
 
 def test_poster_svg_to_png_renders_basic_shapes_and_text():

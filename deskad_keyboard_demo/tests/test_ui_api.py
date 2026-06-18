@@ -1,4 +1,4 @@
-from ui_api import poster_preview_height, responsive_svg_document, svg_aspect_ratio
+from ui.api_client import poster_preview_height, responsive_svg_document, svg_aspect_ratio
 
 
 def test_svg_aspect_ratio_uses_viewbox_dimensions():

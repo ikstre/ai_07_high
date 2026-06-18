@@ -13,14 +13,26 @@
 
 ---
 
+## 문서
+
+| 문서 | 내용 |
+|------|------|
+| [docs/architecture.md](docs/architecture.md) | 기술 문서 — 시스템 구조, 4단계 워크플로우, **배열 충실도(depth-ControlNet)**, 이미지 파이프라인, GPU 워커 |
+| [docs/schema.md](docs/schema.md) | 스키마 구성 — API 엔드포인트, 요청/응답 Pydantic 모델 |
+| [docs/security.md](docs/security.md) | 보안 가이드 — 위협 모델, 시크릿 위생, 인증, 입력 검증, 워커 격리 |
+| [docs/deploy.md](docs/deploy.md) | 배포 가이드 |
+
+> 발표용 보고서(PDF)·슬라이드(PPTX)는 `docs/presentation/`에 빌드된다(기본 비공개; `tools/build_presentation.py`로 재생성).
+
+---
+
 ## 이미지 생성 엔진
 
-광고 문구·이미지는 **엔진**을 골라 생성합니다(`engine` = `auto`/`local`/`hyperclova`/`openai`). 사용 가능 여부는 `GET /ai/providers`로 조회합니다.
+광고 문구·이미지는 **엔진**을 골라 생성합니다(`engine` = `auto`/`local`/`openai`). 사용 가능 여부는 `GET /ai/providers`로 조회합니다.
 
 | 엔진 | 광고 문구 | 광고 이미지 | 비고 |
 |------|-----------|-------------|------|
-| `local` | 로컬 LLM(Ollama) | ComfyUI/FLUX (depth-ControlNet / img2img) | 키 불필요, 셋업 배열을 구조·픽셀로 고정해 정확도 우선 |
-| `hyperclova` | HyperCLOVA X SEED | ComfyUI/FLUX (2트랙) | 카피는 HyperCLOVA, 이미지는 ComfyUI로 라우팅 |
+| `local` | 로컬 LLM 후보(HyperCLOVA X SEED 포함) | ComfyUI/FLUX (depth-ControlNet / img2img) | 키 불필요, 셋업 배열을 구조·픽셀로 고정해 정확도 우선 |
 | `openai` | OpenAI 호환 API | OpenAI 이미지 | `OPENAI_API_KEY` 필요 |
 
 - **비동기 이미지 잡**: `POST /ai/image/jobs`로 큐에 넣고 `GET /ai/image/jobs/{id}`로 폴링합니다. 동기 `POST /ai/image`도 유지됩니다.

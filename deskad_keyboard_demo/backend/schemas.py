@@ -93,12 +93,12 @@ class SelectedCopy(BaseModel):
     """UI에서 선택한 광고 문구를 검증한다."""
 
     provider: str = Field(default="selected", max_length=60)
-    headline: str = Field(default="", max_length=80)
-    subcopy: str = Field(default="", max_length=160)
-    cta: str = Field(default="", max_length=40)
-    copies: list[str] = Field(default_factory=list, max_length=5)
-    hashtags: list[str] = Field(default_factory=list, max_length=6)
-    spec_bullets: list[str] = Field(default_factory=list, max_length=5)
+    headline: str = ""
+    subcopy: str = ""
+    cta: str = ""
+    copies: list[str] = Field(default_factory=list)
+    hashtags: list[str] = Field(default_factory=list)
+    spec_bullets: list[str] = Field(default_factory=list)
 
 
 class AdContentRequest(DeskSetupRenderRequest):
@@ -130,9 +130,9 @@ class AdContentRequest(DeskSetupRenderRequest):
     image_job_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
     image_workflow: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_\-]*$")
     poster_template: str = Field(default="minimal_card", pattern=r"^(minimal_card|grid_three|feature_focus|promo_banner)$")
-    # 평가 트랙(생성 엔진): openai=OpenAI API, hyperclova=HyperCLOVA, local=로컬 텍스트+ComfyUI.
+    # 생성 엔진: openai=OpenAI API, local=로컬 텍스트+ComfyUI.
     # auto는 서버 기본값(AI_PROVIDER/IMAGE_MODEL_BACKEND)을 따른다.
-    engine: str = Field(default="auto", pattern=r"^(auto|openai|hyperclova|local)$")
+    engine: str = Field(default="auto", pattern=r"^(auto|openai|local)$")
     # OpenAI 엔진의 모델 등급(일반/고성능). 다른 엔진에서는 무시된다.
     engine_model_tier: str = Field(default="general", pattern=r"^(general|performance)$")
     selected_copy: SelectedCopy | None = None
@@ -159,7 +159,7 @@ class LibraryModelRequest(BaseModel):
 class ActivateTrackRequest(BaseModel):
     """생성 엔진(트랙) 선택 시 GPU 워커 사전 워밍업 요청을 검증한다."""
 
-    track: str = Field(pattern=r"^(auto|openai|hyperclova|local)$")
+    track: str = Field(pattern=r"^(auto|openai|local)$")
 
 
 class CopyExperimentRequest(AdContentRequest):

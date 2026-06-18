@@ -34,7 +34,7 @@ FastAPI 백엔드 + Streamlit 프론트엔드(앱 티어)를 Docker로 띄우는
    cp .env.example .env
    # 로그인/가입코드/엔진 키·워커 URL 등 입력
    ```
-3. **GPU 워커는 호스트에서 기동**되어 있어야 GPU 경로(local/hyperclova)가 동작합니다.
+3. **GPU 워커는 호스트에서 기동**되어 있어야 GPU 경로(local+ComfyUI)가 동작합니다.
    키·워커가 없어도 앱은 폴백(템플릿 문구 + SVG 일러스트)으로 동작합니다.
 
 ---

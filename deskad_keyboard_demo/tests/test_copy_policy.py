@@ -24,21 +24,25 @@ def test_replaces_forbidden_terms_and_reports_compact_spaced_term():
     assert "완벽한" in output["policy"]["flagged_terms"]
 
 
-def test_youtube_shorts_policy_limits_lengths_and_hashtags():
+def test_youtube_shorts_policy_keeps_display_text_and_limits_hashtags_only():
+    headline = "짧은 영상에서도 바로 보이는 커스텀 키보드 데스크 셋업"
+    subcopy = "조용한 타건감과 크림 톤 키캡을 한 장면 안에 담은 쇼츠용 설명 문구입니다"
+    cta = "자세히 보러가기"
     output = apply_copy_policy(
         {"target_channel": "유튜브 쇼츠"},
         _copy_result(
-            headline="짧은 영상에서도 바로 보이는 커스텀 키보드 데스크 셋업",
-            subcopy="조용한 타건감과 크림 톤 키캡을 한 장면 안에 담은 쇼츠용 설명 문구입니다",
-            cta="자세히 보러가기",
+            headline=headline,
+            subcopy=subcopy,
+            cta=cta,
         ),
     )
 
     assert output["policy"]["channel"] == "유튜브 쇼츠"
     assert output["policy"]["headline_max"] == 26
-    assert len(output["headline"]) <= 26
-    assert len(output["subcopy"]) <= 64
-    assert len(output["cta"]) <= 14
+    assert output["policy"]["length_enforced"] is False
+    assert output["headline"] == headline
+    assert output["subcopy"] == subcopy
+    assert output["cta"] == cta
     assert output["hashtags"] == ["#DeskSetup", "#키보드", "#커스텀키보드"]
 
 

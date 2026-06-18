@@ -2,7 +2,6 @@
 
 키·네트워크 없이 결정적으로 검증 가능한 항목만 (실호출 품질은 별도).
 """
-import base64
 import io
 
 from PIL import Image
@@ -27,16 +26,16 @@ def test_gpt5_family_uses_completion_tokens_param():
 # ── 엔진 → provider / backend 매핑 ─────────────────────────────────────────
 def test_engine_text_and_image_backend_mapping():
     assert ai._engine_text_provider({"engine": "openai"}) == "openai"
-    assert ai._engine_text_provider({"engine": "hyperclova"}) == "hyperclova"
     assert ai._engine_text_provider({"engine": "local"}) == "local"
+    # legacy HyperCLOVA engine payloads are merged into local+ComfyUI.
+    assert ai._engine_text_provider({"engine": "hyperclova"}) == "local"
     # auto/미지정은 None → 서버 기본값(AI_PROVIDER) 사용
     assert ai._engine_text_provider({"engine": "auto"}) is None
     assert ai._engine_text_provider({}) is None
 
     assert ai._engine_image_backend({"engine": "openai"}) == "openai"
-    # 이미지 2트랙 정리(2026-06-16): hyperclova도 이미지는 ComfyUI로 라우팅(Omni 네이티브 제외).
-    assert ai._engine_image_backend({"engine": "hyperclova"}) == "comfyui"
     assert ai._engine_image_backend({"engine": "local"}) == "comfyui"
+    assert ai._engine_image_backend({"engine": "hyperclova"}) == "comfyui"
     assert ai._engine_image_backend({"engine": "auto"}) is None
 
 
@@ -59,6 +58,133 @@ def test_openai_tier_model_mapping(monkeypatch):
     assert ai._openai_image_model({"engine_model_tier": "performance"}) == "gpt-image-2"
     # 잘못된 등급은 general로 폴백
     assert ai._openai_text_model({"engine_model_tier": "bogus"}) == "gpt-5.4-mini"
+
+
+def test_local_engine_image_job_routes_to_comfyui(monkeypatch):
+    settings = _HyperImageSettings()
+    submitted: list[tuple[dict, dict, str]] = []
+    saved: dict[str, dict] = {}
+
+    class Store:
+        def get(self, job_id):
+            return saved.get(job_id)
+
+        def save(self, job):
+            saved[job["job_id"]] = dict(job)
+            return dict(job)
+
+    def submit(job, payload, image_prompt):
+        submitted.append((dict(job), dict(payload), image_prompt))
+        job.update({"provider": "comfyui", "status": "queued", "comfyui_prompt_id": "prompt-1"})
+        return job
+
+    monkeypatch.setattr(ai, "get_settings", lambda: settings)
+    monkeypatch.setattr(ai, "IMAGE_JOB_STORE", Store())
+    monkeypatch.setattr(ai, "_select_workflow_path", lambda payload: None)
+    monkeypatch.setattr(ai, "_image_backend_config", lambda: {})
+    monkeypatch.setattr(ai, "_submit_comfyui_job", submit)
+
+    from backend import runtime_workers
+
+    monkeypatch.setattr(runtime_workers, "ensure_image_worker", lambda: True)
+    monkeypatch.setattr(runtime_workers, "schedule_idle_reap", lambda: None)
+
+    result = ai.create_image_job(
+        {"engine": "local", "image_ratio": "1:1"},
+        "studio keyboard photo",
+        force_regen=True,
+    )
+
+    assert result["provider"] == "comfyui"
+    assert result["status"] == "queued"
+    assert submitted[0][1]["engine"] == "local"
+
+
+def test_local_copy_variants_compare_all_local_text_candidates(monkeypatch):
+    from backend import result_cache, runtime_workers
+    from backend.llm_adapters import ChatCompletionAdapter
+
+    calls: list[tuple[str, float, int, int]] = []
+
+    def fake_adapter(provider_id, payload=None):
+        return ChatCompletionAdapter(
+            name=provider_id,
+            base_url="http://127.0.0.1:11434/v1",
+            model=f"{provider_id}-model",
+        )
+
+    def fake_chat(payload, adapter):
+        calls.append(
+            (
+                adapter.name,
+                payload["_copy_temperature_override"],
+                payload["_copy_request_timeout_override"],
+                payload["_copy_max_retries_override"],
+            )
+        )
+        return {
+            "provider": adapter.name,
+            "headline": f"{adapter.name} headline {len(calls)}",
+            "subcopy": "subcopy",
+            "cta": "cta",
+            "copies": ["copy"],
+            "hashtags": [],
+            "spec_bullets": [],
+        }
+
+    monkeypatch.setattr(ai, "_copy_adapter", fake_adapter)
+    monkeypatch.setattr(ai, "_chat_copy", fake_chat)
+    monkeypatch.setattr(result_cache, "get_text_cache", lambda cache_key: None)
+    monkeypatch.setattr(result_cache, "put_text_cache", lambda cache_key, result: None)
+    monkeypatch.setattr(runtime_workers, "ensure_text_worker", lambda start_managed_worker=True: True)
+    monkeypatch.setattr(runtime_workers, "schedule_idle_reap", lambda: None)
+    for name in (
+        "COPY_VARIANT_REQUEST_TIMEOUT_SECONDS",
+        "COPY_VARIANT_HYPERCLOVA_TIMEOUT_SECONDS",
+        "COPY_VARIANT_LOCAL_TIMEOUT_SECONDS",
+        "COPY_VARIANT_KANANA_TIMEOUT_SECONDS",
+        "COPY_VARIANT_MIDM_TIMEOUT_SECONDS",
+        "COPY_VARIANT_MAX_RETRIES",
+        "COPY_VARIANT_LOCAL_TRACK_PROVIDERS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    result = ai.generate_copy_variants({"engine": "local"}, n=4, force_regen=True)
+
+    # qwen(local)은 Read timeout이 잦아 기본 후보에서 제외 → 하이퍼클로바·카나나·믿음 3종.
+    assert result["provider"] == "local"
+    assert result["mode"] == "local_provider_variants"
+    assert result["variants_per_provider"] == 2
+    assert [item["provider"] for item in result["results"]] == [
+        "hyperclova",
+        "hyperclova",
+        "kanana",
+        "kanana",
+        "midm",
+        "midm",
+    ]
+    assert calls == [
+        ("hyperclova", 0.5, 90, 0),
+        ("hyperclova", 0.8, 90, 0),
+        ("kanana", 0.5, 25, 0),
+        ("kanana", 0.8, 25, 0),
+        ("midm", 0.5, 25, 0),
+        ("midm", 0.8, 25, 0),
+    ]
+
+
+def test_local_track_provider_order_env_override(monkeypatch):
+    # 기본값: qwen(local)은 제외하고 하이퍼클로바·카나나·믿음.
+    monkeypatch.delenv("COPY_VARIANT_LOCAL_TRACK_PROVIDERS", raising=False)
+    assert ai._local_track_text_provider_order() == ["hyperclova", "kanana", "midm"]
+
+    # env로 qwen(local) 재포함 — 별칭(local_llm)·공백도 정규화한다.
+    monkeypatch.setenv("COPY_VARIANT_LOCAL_TRACK_PROVIDERS", " hyperclova, local_llm , kanana ,midm ")
+    assert ai._local_track_text_provider_order() == ["hyperclova", "local", "kanana", "midm"]
+
+    # 공백/빈 값이면 기본값으로 폴백한다.
+    monkeypatch.setenv("COPY_VARIANT_LOCAL_TRACK_PROVIDERS", "   ")
+    assert ai._local_track_text_provider_order() == ["hyperclova", "kanana", "midm"]
 
 
 # ── 구도 무결성: 셋업 인벤토리 + 강화 네거티브 ────────────────────────────
@@ -105,15 +231,15 @@ def test_minimal_card_always_renders_cta_text():
     assert "지금 구매하기" in svg
 
 
-def test_minimal_card_caps_headline_to_two_lines():
-    long_headline = "아주 긴 헤드라인 문구 한국어로 두 줄을 훌쩍 넘기도록 충분히 길게 작성한 제목"
+def test_minimal_card_keeps_full_long_headline_text():
+    long_headline = "아주 긴 헤드라인 문구 한국어로 두 줄을 훌쩍 넘기도록 충분히 길게 작성한 제목 마지막문구"
     svg = ai._minimal_card_svg(
         {"image_ratio": "1:1", "theme": "minimal", "product_name": "제품", "price": "10000원"},
         {"headline": long_headline, "subcopy": "서브", "cta": "구매", "copies": ["a"]},
         None,
     )
-    # headline 글자 묶음(font-weight 800, font-size 48)은 최대 2줄
-    assert svg.count('font-size="48" font-weight="800"') <= 2
+    assert "마지막문구" in svg
+    assert "…" not in svg
 
 
 def test_cta_contrast_colors_are_readable():
@@ -363,7 +489,7 @@ def test_hyperclova_vision_uses_explicit_vision_endpoint(monkeypatch):
     assert adapter.supports_vision is True
 
 
-def test_generation_tracks_expose_three_user_facing_routes(monkeypatch):
+def test_generation_tracks_merge_hyperclova_into_local_route(monkeypatch):
     settings = _HyperImageSettings()
     settings.hyperclova_base_url = "http://127.0.0.1:11434/v1"
     settings.hyperclova_model = "hyperclova-omni-8b-text:Q4_K_M"
@@ -373,16 +499,15 @@ def test_generation_tracks_expose_three_user_facing_routes(monkeypatch):
 
     tracks = {track["id"]: track for track in ai.generation_tracks()}
 
-    assert set(tracks) == {"openai", "hyperclova", "local"}
+    assert set(tracks) == {"openai", "local"}
     assert tracks["openai"]["text_provider"] == "openai"
     assert tracks["openai"]["image_backend"] == "openai"
-    assert tracks["hyperclova"]["text_provider"] == "hyperclova"
-    # hyperclova 이미지는 ComfyUI로 라우팅 → image_backend/configured는 ComfyUI 기준(fixture는 설정됨).
-    # Omni 이미지 엔드포인트 미설정 상태는 진단용 omni_image_configured로만 노출.
-    assert tracks["hyperclova"]["image_backend"] == "comfyui"
-    assert tracks["hyperclova"]["image_configured"] is True
-    assert tracks["hyperclova"]["omni_image_configured"] is False
     assert tracks["local"]["text_provider"] == "local"
+    assert tracks["local"]["active_text_provider"] == "hyperclova"
     assert tracks["local"]["image_backend"] == "comfyui"
     assert tracks["local"]["image_configured"] is True
-    assert [item["id"] for item in tracks["local"]["text_candidates"]] == ["local", "kanana", "midm"]
+    assert [item["id"] for item in tracks["local"]["text_candidates"]] == [
+        "hyperclova",
+        "kanana",
+        "midm",
+    ]

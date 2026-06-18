@@ -2358,20 +2358,43 @@ def build_desk_setup_depth_png(
     size: int = 1024,
     eye_y: float = 52.0,
     eye_z: float = 82.0,
+    azimuth_deg: float | None = None,
+    elevation_deg: float | None = None,
+    radius: float | None = None,
+    target: tuple[float, float, float] = (0.0, 2.0, 6.0),
 ) -> bytes | None:
     """GLB 데스크 씬을 헤드리스 렌더해 depth-ControlNet 입력 PNG 바이트를 반환.
 
-    카메라/구도는 ``build_setup_composition_raster``의 hero 3/4(전면-상단에서 키보드를
-    내려다보는 앵글)와 같은 계열이라 프롬프트 앵글과 일치한다. depth는 near=밝게/far=어둡게로
-    정규화하고 빈 공간(z-buffer 미히트)은 검정으로 둔다(FLUX depth ControlNet 규약).
-    실패하면 ``None``(호출부가 ControlNet 없이 진행하거나 draft 처리).
+    기본 카메라는 ``build_setup_composition_raster``의 hero 3/4(전면-상단에서 키보드를
+    내려다보는 앵글)와 같은 계열이라 프롬프트 앵글과 일치한다. ``azimuth_deg``/
+    ``elevation_deg``(+선택 ``radius``)를 주면 ``target`` 주위 구면좌표로 eye를 계산해
+    컷별(hero/eye-level/wide) 시점을 분리한다 — 안 주면 기존 정면-상단(``eye_y``/``eye_z``)
+    그대로다. azimuth=0°는 정면(+Z), 양수는 우측으로 공전하고, elevation은 수평면 위 올림각이다.
+    depth는 near=밝게/far=어둡게로 정규화하고 빈 공간(z-buffer 미히트)은 검정으로 둔다
+    (FLUX depth ControlNet 규약). 실패하면 ``None``(호출부가 ControlNet 없이 진행하거나 draft).
     """
+    tx, ty, tz = float(target[0]), float(target[1]), float(target[2])
+    if azimuth_deg is None or elevation_deg is None:
+        # 레거시 기본: 정면(+Z)-상단 고정 앵글.
+        eye = (0.0, float(eye_y), float(eye_z))
+    else:
+        # target 주위 구면좌표 → eye. radius 미지정이면 레거시 eye까지의 거리를 쓴다.
+        r = float(radius) if radius is not None else math.hypot(float(eye_y) - ty, float(eye_z) - tz)
+        az = math.radians(float(azimuth_deg))
+        el = math.radians(float(elevation_deg))
+        horizontal = r * math.cos(el)
+        eye = (tx + horizontal * math.sin(az), ty + r * math.sin(el), tz + horizontal * math.cos(az))
     try:
         path = Path(glb_path)
         if not path.exists():
             return None
         S = max(256, int(size))
-        cache_key = (str(path.resolve()), path.stat().st_mtime_ns, S, float(eye_y), float(eye_z))
+        # eye/target을 캐시 키에 넣어 컷별(각도별) depth가 섞이지 않게 한다.
+        cache_key = (
+            str(path.resolve()), path.stat().st_mtime_ns, S,
+            round(eye[0], 3), round(eye[1], 3), round(eye[2], 3),
+            round(tx, 3), round(ty, 3), round(tz, 3),
+        )
     except OSError:
         return None
     cached = _DEPTH_CACHE.get(cache_key)
@@ -2417,7 +2440,7 @@ def build_desk_setup_depth_png(
             tscene, bg_color=[0, 0, 0, 255], ambient_light=[1.0, 1.0, 1.0]
         )
         cam = pyrender.PerspectiveCamera(yfov=0.62, aspectRatio=1.0)
-        scene.add(cam, pose=_look_at((0.0, float(eye_y), float(eye_z)), (0.0, 2.0, 6.0)))
+        scene.add(cam, pose=_look_at(eye, (tx, ty, tz)))
         renderer = pyrender.OffscreenRenderer(S, S)
         _, depth = renderer.render(scene)
     except Exception:

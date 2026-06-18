@@ -426,3 +426,67 @@ def test_depth_png_renders_small_glb_and_caches(tmp_path):
         pytest.skip("headless GL(OSMesa) 미가용 환경")
     assert png[:8] == b"\x89PNG\r\n\x1a\n"       # 유효 PNG
     assert build_desk_setup_depth_png(glb, size=256) == png  # 2회차는 캐시(동일 바이트)
+
+
+def test_depth_png_camera_angle_changes_output(tmp_path):
+    # 다른 카메라 각도(hero 높은 3/4 vs eye_level 낮은 수평)는 다른 depth를 내야 한다.
+    # (단위테스트로 "각도가 맞는지"는 못 잡지만 "각도가 실제로 적용돼 달라지는지"는 잡는다.)
+    trimesh = pytest.importorskip("trimesh")
+    pytest.importorskip("pyrender")
+    box = trimesh.creation.box(extents=[40.0, 10.0, 40.0])
+    box.apply_translation([0.0, 5.0, 6.0])  # 카메라 타깃 부근(보이도록)
+    glb = tmp_path / "box.glb"
+    box.export(str(glb))
+
+    high = build_desk_setup_depth_png(glb, size=256, azimuth_deg=26.0, elevation_deg=36.0, radius=95.0)
+    if high is None:
+        pytest.skip("headless GL(OSMesa) 미가용 환경")
+    low = build_desk_setup_depth_png(glb, size=256, azimuth_deg=12.0, elevation_deg=18.0, radius=100.0)
+    assert high[:8] == b"\x89PNG\r\n\x1a\n"
+    assert low is not None and low != high          # 각도 분리 → depth 분리(캐시 키도 eye 기준)
+    assert build_desk_setup_depth_png(glb, size=256) is not None  # 레거시 기본(각도 미지정)도 동작
+
+
+def test_depth_upload_uses_per_shot_camera_and_unique_name(tmp_path, monkeypatch):
+    # _upload_controlnet_depth_to_comfyui가 (1) shot_type별로 다른 카메라 kwargs를 넘기고
+    # (2) 컷별로 유니크한 ComfyUI 파일명으로 올리는지(고정 파일명 overwrite 클로버 방지).
+    payload = _payload_with_glb(tmp_path, monkeypatch)
+    cam_calls: list[dict] = []
+    uploaded_names: list[str] = []
+
+    from backend import renderer
+
+    def _fake_depth(_glb_path, **kwargs):
+        cam_calls.append(kwargs)
+        return b"depthpng"  # 같은 바이트라도 shot_type이 파일명을 갈라야 한다
+
+    monkeypatch.setattr(renderer, "build_desk_setup_depth_png", _fake_depth)
+    monkeypatch.setattr(ai, "_resize_reference_to_ratio", lambda png, p: png)
+
+    class _Resp:
+        def __init__(self, name):
+            self._name = name
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"name": self._name}
+
+    def _fake_post(*_a, **kwargs):
+        name = kwargs["files"]["image"][0]  # 업로드 파일명(=ComfyUI가 저장하는 이름)
+        uploaded_names.append(name)
+        return _Resp(name)
+
+    monkeypatch.setattr(ai.requests, "post", _fake_post)
+    settings = _settings(comfyui_base_url="http://comfy")
+
+    hero_name = ai._upload_controlnet_depth_to_comfyui({**payload, "shot_type": "hero"}, settings)
+    eye_name = ai._upload_controlnet_depth_to_comfyui({**payload, "shot_type": "eye_level"}, settings)
+
+    assert cam_calls[0] == {"azimuth_deg": 26.0, "elevation_deg": 36.0, "radius": 95.0}
+    assert cam_calls[1] == {"azimuth_deg": 12.0, "elevation_deg": 18.0, "radius": 100.0}
+    assert cam_calls[0] != cam_calls[1]            # hero·eye_level 카메라 분리
+    assert "hero" in hero_name and "eye_level" in eye_name
+    assert hero_name != eye_name                   # 파일명 분리 → ComfyUI 클로버 방지(회귀 가드)
+    assert uploaded_names == [hero_name, eye_name]  # 반환값 = 실제 업로드 파일명

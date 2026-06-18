@@ -18,8 +18,11 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 
-def _retry_settings() -> tuple[int, float, float]:
-    max_retries = max(0, int(os.getenv("LLM_MAX_RETRIES", "3")))
+def _retry_settings(max_retries_override: int | None = None) -> tuple[int, float, float]:
+    if max_retries_override is None:
+        max_retries = max(0, int(os.getenv("LLM_MAX_RETRIES", "3")))
+    else:
+        max_retries = max(0, int(max_retries_override))
     base_backoff = max(0.0, float(os.getenv("LLM_RETRY_BACKOFF_SECONDS", "0.5")))
     max_backoff = max(base_backoff, float(os.getenv("LLM_RETRY_MAX_BACKOFF_SECONDS", "8")))
     return max_retries, base_backoff, max_backoff
@@ -53,13 +56,21 @@ def _max_tokens_param(model: str) -> str:
     return "max_completion_tokens" if _is_reasoning_model(model) else "max_tokens"
 
 
-def _post_with_retry(url: str, *, headers: dict, json: dict, timeout: int, provider: str) -> requests.Response:
+def _post_with_retry(
+    url: str,
+    *,
+    headers: dict,
+    json: dict,
+    timeout: int,
+    provider: str,
+    max_retries_override: int | None = None,
+) -> requests.Response:
     """POST with exponential backoff + jitter on transient failures.
 
     Retries on connection errors, timeouts, and 5xx/429-class statuses; raises
     immediately on non-retryable 4xx so the caller can fall back to the next provider.
     """
-    max_retries, base_backoff, max_backoff = _retry_settings()
+    max_retries, base_backoff, max_backoff = _retry_settings(max_retries_override)
     session = requests.Session()
     session.trust_env = False
     last_error: BaseException | None = None
@@ -152,6 +163,7 @@ class ChatCompletionAdapter:
         timeout: int,
         messages: list[dict] | None = None,
         temperature: float | None = None,
+        max_retries: int | None = None,
     ) -> str:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -183,13 +195,15 @@ class ChatCompletionAdapter:
         if self.json_response_format:
             body["response_format"] = {"type": "json_object"}
 
-        response = _post_with_retry(
-            normalize_chat_completions_url(self.base_url),
-            headers=headers,
-            json=body,
-            timeout=timeout,
-            provider=self.name,
-        )
+        post_kwargs = {
+            "headers": headers,
+            "json": body,
+            "timeout": timeout,
+            "provider": self.name,
+        }
+        if max_retries is not None:
+            post_kwargs["max_retries_override"] = max_retries
+        response = _post_with_retry(normalize_chat_completions_url(self.base_url), **post_kwargs)
         result = response.json()
         return result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
@@ -245,6 +259,7 @@ class HyperClovaDirectAdapter:
         timeout: int,
         messages: list[dict] | None = None,
         temperature: float | None = None,
+        max_retries: int | None = None,
     ) -> str:
         headers = {
             "Content-Type": "application/json",
@@ -268,9 +283,15 @@ class HyperClovaDirectAdapter:
             "includeAiFilters": True,
         }
 
-        response = _post_with_retry(
-            self._endpoint(), headers=headers, json=body, timeout=timeout, provider=self.name
-        )
+        post_kwargs = {
+            "headers": headers,
+            "json": body,
+            "timeout": timeout,
+            "provider": self.name,
+        }
+        if max_retries is not None:
+            post_kwargs["max_retries_override"] = max_retries
+        response = _post_with_retry(self._endpoint(), **post_kwargs)
         result = response.json() or {}
         message = (result.get("result") or {}).get("message") or {}
         content = message.get("content") or ""

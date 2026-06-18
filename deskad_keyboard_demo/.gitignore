@@ -10,3 +10,5 @@ data/runtime/cache/
 docs/*
 !docs/security.md
 !docs/deploy.md
+!docs/architecture.md
+!docs/schema.md

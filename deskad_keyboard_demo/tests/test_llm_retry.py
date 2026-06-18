@@ -100,6 +100,23 @@ def test_post_with_retry_exhausts_connection_errors(monkeypatch):
     assert session.calls == 3
 
 
+def test_post_with_retry_allows_per_request_retry_override(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_RETRIES", "2")
+    session = _patch_session(monkeypatch, FakeSession([requests.ConnectionError("down")]))
+
+    with pytest.raises(requests.ConnectionError):
+        llm_adapters._post_with_retry(
+            "http://example.test/v1/chat/completions",
+            headers={},
+            json={},
+            timeout=1,
+            provider="test",
+            max_retries_override=0,
+        )
+
+    assert session.calls == 1
+
+
 def test_chat_adapter_passes_custom_messages_and_temperature(monkeypatch):
     monkeypatch.setenv("LLM_MAX_TOKENS", "1536")
     session = _patch_session(monkeypatch, FakeSession([FakeResponse(200)]))

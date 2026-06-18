@@ -7,9 +7,8 @@ from backend import ai, result_cache, runtime_workers
 
 def test_track_warm_plan_maps_user_tracks():
     assert runtime_workers.track_warm_plan("openai") == []
-    # 이미지 2트랙 정리(2026-06-16): hyperclova도 이미지는 ComfyUI("image") 워커를 예열(local과 동일).
-    assert runtime_workers.track_warm_plan("hyperclova") == ["image"]
     assert runtime_workers.track_warm_plan("LOCAL") == ["image"]
+    assert runtime_workers.track_warm_plan("hyperclova") is None
     assert runtime_workers.track_warm_plan("auto") is None
     assert runtime_workers.track_warm_plan("unknown") is None
 
@@ -74,10 +73,10 @@ def test_activate_track_always_on_does_not_schedule(monkeypatch):
 
     monkeypatch.setattr(runtime_workers.threading, "Thread", fail_thread)
 
-    result = runtime_workers.activate_track("hyperclova")
+    result = runtime_workers.activate_track("local")
 
     assert result == {
-        "track": "hyperclova",
+        "track": "local",
         "mode": "always_on",
         "scheduled": False,
         "message": "GPU_WORKER_MODE=always_on — workers are managed externally",
